@@ -5,4 +5,5 @@ prophet
 scikit-learn
 bcrypt
 PyJWT
-mysql-connector-python
+fpdf2
+openpyxl

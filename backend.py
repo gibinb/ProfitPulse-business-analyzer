@@ -44,13 +44,13 @@ def register_user(username, gmail, password, admin_code=""):
         return False
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT username FROM users WHERE username=%s", (username,))
+    cursor.execute("SELECT username FROM users WHERE username=?", (username,))
     if cursor.fetchone():
         cursor.close(); conn.close()
         return False
     role = "Admin" if admin_code == ADMIN_CODE else "Owner"
     cursor.execute(
-        "INSERT INTO users (username, gmail, password, role) VALUES (%s,%s,%s,%s)",
+        "INSERT INTO users (username, gmail, password, role) VALUES (?,?,?,?)",
         (username, gmail, hash_password(password), role),
     )
     conn.commit(); cursor.close(); conn.close()
@@ -59,7 +59,7 @@ def register_user(username, gmail, password, admin_code=""):
 def get_user(username):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT username, password FROM users WHERE username=%s", (username,))
+    cursor.execute("SELECT username, password FROM users WHERE username=?", (username,))
     user = cursor.fetchone()
     cursor.close(); conn.close()
     return user
@@ -67,7 +67,7 @@ def get_user(username):
 def get_profile(username):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT username, gmail, role FROM users WHERE username=%s", (username,))
+    cursor.execute("SELECT username, gmail, role FROM users WHERE username=?", (username,))
     user = cursor.fetchone()
     cursor.close(); conn.close()
     return user
@@ -75,7 +75,7 @@ def get_profile(username):
 def get_user_role(username):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT role FROM users WHERE username=%s", (username,))
+    cursor.execute("SELECT role FROM users WHERE username=?", (username,))
     result = cursor.fetchone()
     cursor.close(); conn.close()
     return result[0] if result else "Owner"
@@ -83,7 +83,7 @@ def get_user_role(username):
 def update_user_role(username, new_role):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET role=%s WHERE username=%s", (new_role, username))
+    cursor.execute("UPDATE users SET role=? WHERE username=?", (new_role, username))
     conn.commit(); cursor.close(); conn.close()
 
 def get_all_users():
@@ -113,7 +113,7 @@ def create_business(owner, business_name):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO business (owner_username, business_name) VALUES (%s,%s)",
+        "INSERT INTO business (owner_username, business_name) VALUES (?,?)",
         (owner, business_name),
     )
     conn.commit(); cursor.close(); conn.close()
@@ -122,7 +122,7 @@ def get_user_businesses(username):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, business_name FROM business WHERE owner_username=%s", (username,)
+        "SELECT id, business_name FROM business WHERE owner_username=?", (username,)
     )
     rows = cursor.fetchall()
     cursor.close(); conn.close()
@@ -132,7 +132,7 @@ def get_user_business(username):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id FROM business WHERE owner_username=%s LIMIT 1", (username,)
+        "SELECT id FROM business WHERE owner_username=? LIMIT 1", (username,)
     )
     result = cursor.fetchone()
     cursor.close(); conn.close()
@@ -145,7 +145,7 @@ def save_sales(username, business_id, product, qty, amount, date, notes=""):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT unit_cost FROM inventory WHERE product=%s AND business_id=%s LIMIT 1",
+        "SELECT unit_cost FROM inventory WHERE product=? AND business_id=? LIMIT 1",
         (product, business_id),
     )
     result    = cursor.fetchone()
@@ -155,15 +155,15 @@ def save_sales(username, business_id, product, qty, amount, date, notes=""):
     cursor.execute(
         """INSERT INTO transactions
            (username, type, amount, business_id, cogs, product, quantity, txn_date, notes)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+           VALUES (?,?,?,?,?,?,?,?,?)""",
         (username, "Sales", amount, business_id, total_cogs, product, qty, date, notes),
     )
     cursor.execute(
-        "UPDATE inventory SET quantity = quantity - %s WHERE product=%s AND business_id=%s",
+        "UPDATE inventory SET quantity = quantity - ? WHERE product=? AND business_id=?",
         (qty, product, business_id),
     )
     cursor.execute(
-        "INSERT INTO inventory_movements (business_id, product, change_qty, movement_type) VALUES (%s,%s,%s,%s)",
+        "INSERT INTO inventory_movements (business_id, product, change_qty, movement_type) VALUES (?,?,?,?)",
         (business_id, product, -qty, "OUT"),
     )
     conn.commit(); cursor.close(); conn.close()
@@ -174,7 +174,7 @@ def save_expense(username, business_id, amount, category, date, notes=""):
     cursor.execute(
         """INSERT INTO transactions
            (username, type, amount, business_id, category, txn_date, notes)
-           VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+           VALUES (?,?,?,?,?,?,?)""",
         (username, "Expense", amount, business_id, category, date, notes),
     )
     conn.commit(); cursor.close(); conn.close()
@@ -185,15 +185,15 @@ def get_transactions(business_id, txn_type=None, limit=50):
     if txn_type:
         cursor.execute(
             """SELECT id, type, amount, category, product, quantity, txn_date, notes
-               FROM transactions WHERE business_id=%s AND type=%s
-               ORDER BY created_at DESC LIMIT %s""",
+               FROM transactions WHERE business_id=? AND type=?
+               ORDER BY created_at DESC LIMIT ?""",
             (business_id, txn_type, limit),
         )
     else:
         cursor.execute(
             """SELECT id, type, amount, category, product, quantity, txn_date, notes
-               FROM transactions WHERE business_id=%s
-               ORDER BY created_at DESC LIMIT %s""",
+               FROM transactions WHERE business_id=?
+               ORDER BY created_at DESC LIMIT ?""",
             (business_id, limit),
         )
     rows = cursor.fetchall()
@@ -204,7 +204,7 @@ def delete_transaction(transaction_id, business_id):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "DELETE FROM transactions WHERE id=%s AND business_id=%s",
+        "DELETE FROM transactions WHERE id=? AND business_id=?",
         (transaction_id, business_id),
     )
     conn.commit(); cursor.close(); conn.close()
@@ -213,7 +213,7 @@ def update_transaction(transaction_id, business_id, amount, notes):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE transactions SET amount=%s, notes=%s WHERE id=%s AND business_id=%s",
+        "UPDATE transactions SET amount=?, notes=? WHERE id=? AND business_id=?",
         (amount, notes, transaction_id, business_id),
     )
     conn.commit(); cursor.close(); conn.close()
@@ -223,7 +223,7 @@ def get_expense_by_category(business_id):
     cursor = conn.cursor()
     cursor.execute(
         """SELECT category, SUM(amount) FROM transactions
-           WHERE business_id=%s AND type='Expense' GROUP BY category""",
+           WHERE business_id=? AND type='Expense' GROUP BY category""",
         (business_id,),
     )
     data = cursor.fetchall()
@@ -235,11 +235,11 @@ def get_expense_by_category(business_id):
 
 def _period_filter(period):
     if period == "today":
-        return " AND DATE(txn_date) = CURDATE()"
+        return " AND DATE(txn_date) = DATE('now')"
     if period == "week":
-        return " AND YEARWEEK(txn_date,1) = YEARWEEK(CURDATE(),1)"
+        return " AND DATE(txn_date) >= DATE('now','-7 days')"
     if period == "month":
-        return " AND MONTH(txn_date)=MONTH(CURDATE()) AND YEAR(txn_date)=YEAR(CURDATE())"
+        return " AND DATE(txn_date) >= DATE('now','-30 days')"
     return ""
 
 def calculate_profit(business_id, period="all"):
@@ -248,19 +248,19 @@ def calculate_profit(business_id, period="all"):
     pf     = _period_filter(period)
 
     cursor.execute(
-        f"SELECT SUM(amount) FROM transactions WHERE business_id=%s AND type='Sales'{pf}",
+        f"SELECT SUM(amount) FROM transactions WHERE business_id=? AND type='Sales'{pf}",
         (business_id,),
     )
     sales = float(cursor.fetchone()[0] or 0)
 
     cursor.execute(
-        f"SELECT SUM(amount) FROM transactions WHERE business_id=%s AND type='Expense'{pf}",
+        f"SELECT SUM(amount) FROM transactions WHERE business_id=? AND type='Expense'{pf}",
         (business_id,),
     )
     expense = float(cursor.fetchone()[0] or 0)
 
     cursor.execute(
-        f"SELECT SUM(cogs) FROM transactions WHERE business_id=%s AND type='Sales'{pf}",
+        f"SELECT SUM(cogs) FROM transactions WHERE business_id=? AND type='Sales'{pf}",
         (business_id,),
     )
     cogs = float(cursor.fetchone()[0] or 0)
@@ -275,7 +275,7 @@ def get_sales_trend(business_id, period="month"):
     cursor.execute(
         f"""SELECT DATE(txn_date), SUM(amount), SUM(cogs)
             FROM transactions
-            WHERE business_id=%s AND type='Sales'{pf}
+            WHERE business_id=? AND type='Sales'{pf}
             GROUP BY DATE(txn_date) ORDER BY DATE(txn_date)""",
         (business_id,),
     )
@@ -292,11 +292,11 @@ def add_inventory(username, business_id, product, qty, cost, date, threshold):
     cursor.execute(
         """INSERT INTO inventory
            (username, product, quantity, unit_cost, purchase_date, business_id, low_stock_threshold)
-           VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+           VALUES (?,?,?,?,?,?,?)""",
         (username, product, qty, cost, date, business_id, threshold),
     )
     cursor.execute(
-        "INSERT INTO inventory_movements (business_id, product, change_qty, movement_type) VALUES (%s,%s,%s,%s)",
+        "INSERT INTO inventory_movements (business_id, product, change_qty, movement_type) VALUES (?,?,?,?)",
         (business_id, product, qty, "IN"),
     )
     conn.commit(); cursor.close(); conn.close()
@@ -306,7 +306,7 @@ def get_inventory(business_id):
     cursor = conn.cursor()
     cursor.execute(
         """SELECT product, quantity, unit_cost, low_stock_threshold, purchase_date
-           FROM inventory WHERE business_id=%s ORDER BY product""",
+           FROM inventory WHERE business_id=? ORDER BY product""",
         (business_id,),
     )
     rows = cursor.fetchall()
@@ -317,7 +317,7 @@ def get_low_stock(business_id):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT product, quantity FROM inventory WHERE business_id=%s AND quantity <= low_stock_threshold",
+        "SELECT product, quantity FROM inventory WHERE business_id=? AND quantity <= low_stock_threshold",
         (business_id,),
     )
     rows = cursor.fetchall()
@@ -329,8 +329,8 @@ def get_inventory_movements(business_id, limit=50):
     cursor = conn.cursor()
     cursor.execute(
         """SELECT product, change_qty, movement_type, movement_date
-           FROM inventory_movements WHERE business_id=%s
-           ORDER BY movement_date DESC LIMIT %s""",
+           FROM inventory_movements WHERE business_id=?
+           ORDER BY movement_date DESC LIMIT ?""",
         (business_id, limit),
     )
     rows = cursor.fetchall()
@@ -341,7 +341,7 @@ def compute_cogs(business_id):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT SUM(cogs) FROM transactions WHERE business_id=%s AND type='Sales'",
+        "SELECT SUM(cogs) FROM transactions WHERE business_id=? AND type='Sales'",
         (business_id,),
     )
     result = cursor.fetchone()
@@ -639,7 +639,7 @@ def generate_excel_report(business_name, business_id, period):
     pf     = _period_filter(period)
     cursor.execute(
         f"""SELECT id, type, amount, category, product, quantity, txn_date, notes
-            FROM transactions WHERE business_id=%s{pf}
+            FROM transactions WHERE business_id=?{pf}
             ORDER BY txn_date DESC""",
         (business_id,),
     )
@@ -655,7 +655,7 @@ def generate_excel_report(business_name, business_id, period):
         cell.font = WHITE; cell.fill = BLUE
 
     cursor.execute(
-        "SELECT product, quantity, unit_cost, low_stock_threshold, purchase_date FROM inventory WHERE business_id=%s",
+        "SELECT product, quantity, unit_cost, low_stock_threshold, purchase_date FROM inventory WHERE business_id=?",
         (business_id,),
     )
     for row in cursor.fetchall():
