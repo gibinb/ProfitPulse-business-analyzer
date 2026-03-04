@@ -463,70 +463,70 @@ def generate_ai_insights(business_id, business_name):
     recommendations = []
 
     if sales == 0:
-        insights.append("📭 No sales data found yet. Start adding transactions to see insights.")
+        insights.append("No sales data found yet. Start adding transactions to see insights.")
         return insights, recommendations
 
     margin = (profit / sales) * 100
     if margin >= 30:
-        insights.append(f"✅ **Strong profit margin of {margin:.1f}%** — your business is highly profitable.")
+        insights.append(f"Strong profit margin of {margin:.1f}% - your business is highly profitable.")
     elif margin >= 10:
-        insights.append(f"⚠️ **Moderate profit margin of {margin:.1f}%** — there is room for improvement.")
-        recommendations.append("💡 Consider reducing operating expenses or increasing product prices slightly.")
+        insights.append(f"Moderate profit margin of {margin:.1f}% - there is room for improvement.")
+        recommendations.append("Consider reducing operating expenses or increasing product prices slightly.")
     else:
-        insights.append(f"🔴 **Low profit margin of {margin:.1f}%** — costs are eating into profits.")
-        recommendations.append("🚨 Urgently review your largest expense categories and find areas to cut costs.")
+        insights.append(f"Low profit margin of {margin:.1f}% - costs are eating into profits.")
+        recommendations.append("Urgently review your largest expense categories and find areas to cut costs.")
 
     if expense > 0:
         expense_ratio = (expense / sales) * 100
         if expense_ratio > 60:
-            insights.append(f"🔴 **Expenses are {expense_ratio:.1f}% of sales** — dangerously high.")
-            recommendations.append("💡 Your expenses are too high. Review Salary and Rent costs first.")
+            insights.append(f"Expenses are {expense_ratio:.1f}% of sales - dangerously high.")
+            recommendations.append("Your expenses are too high. Review Salary and Rent costs first.")
         elif expense_ratio > 40:
-            insights.append(f"⚠️ **Expenses are {expense_ratio:.1f}% of sales** — watch this closely.")
-            recommendations.append("💡 Keep expenses below 40% of sales for a healthier business.")
+            insights.append(f"Expenses are {expense_ratio:.1f}% of sales - watch this closely.")
+            recommendations.append("Keep expenses below 40% of sales for a healthier business.")
         else:
-            insights.append(f"✅ **Expenses are well controlled at {expense_ratio:.1f}% of sales.**")
+            insights.append(f"Expenses are well controlled at {expense_ratio:.1f}% of sales.")
 
     if cogs > 0:
         cogs_ratio = (cogs / sales) * 100
         if cogs_ratio > 60:
-            insights.append(f"🔴 **COGS is {cogs_ratio:.1f}% of revenue** — very high cost of goods.")
-            recommendations.append("💡 Negotiate better prices with suppliers to reduce COGS.")
+            insights.append(f"COGS is {cogs_ratio:.1f}% of revenue - very high cost of goods.")
+            recommendations.append("Negotiate better prices with suppliers to reduce COGS.")
         elif cogs_ratio > 40:
-            insights.append(f"⚠️ **COGS is {cogs_ratio:.1f}% of revenue** — moderate.")
+            insights.append(f"COGS is {cogs_ratio:.1f}% of revenue - moderate.")
         else:
-            insights.append(f"✅ **COGS is healthy at {cogs_ratio:.1f}% of revenue.**")
+            insights.append(f"COGS is healthy at {cogs_ratio:.1f}% of revenue.")
 
     if cat_data:
         top_cat = max(cat_data, key=lambda x: x[1])
-        insights.append(f"📊 **Highest expense category: {top_cat[0]}** — ₹{float(top_cat[1]):,.0f}")
+        insights.append(f"Highest expense category: {top_cat[0]} - Rs {float(top_cat[1]):,.0f}")
         if top_cat[0] in ("Salary", "Rent"):
-            recommendations.append(f"💡 {top_cat[0]} is your biggest cost. Ensure it is proportional to your revenue.")
+            recommendations.append(f"{top_cat[0]} is your biggest cost. Ensure it is proportional to your revenue.")
 
     if trend_rows and len(trend_rows) >= 3:
         revenues = [float(r[1]) for r in trend_rows]
         avg_rev  = sum(revenues) / len(revenues)
         last_rev = revenues[-1]
         if last_rev > avg_rev * 1.1:
-            insights.append(f"📈 **Sales are trending UP** — last day ₹{last_rev:,.0f} vs avg ₹{avg_rev:,.0f}.")
+            insights.append(f"Sales are trending UP - last day Rs {last_rev:,.0f} vs avg Rs {avg_rev:,.0f}.")
         elif last_rev < avg_rev * 0.9:
-            insights.append(f"📉 **Sales are trending DOWN** — last day ₹{last_rev:,.0f} vs avg ₹{avg_rev:,.0f}.")
-            recommendations.append("💡 Sales are declining. Consider running a promotion or marketing campaign.")
+            insights.append(f"Sales are trending DOWN - last day Rs {last_rev:,.0f} vs avg Rs {avg_rev:,.0f}.")
+            recommendations.append("Sales are declining. Consider running a promotion or marketing campaign.")
         else:
-            insights.append(f"➡️ **Sales are stable** — averaging ₹{avg_rev:,.0f} per day this month.")
+            insights.append(f"Sales are stable - averaging Rs {avg_rev:,.0f} per day this month.")
 
     if low_stock:
         items = ", ".join([i[0] for i in low_stock])
-        insights.append(f"⚠️ **{len(low_stock)} item(s) low on stock:** {items}")
-        recommendations.append(f"🛒 Restock {items} soon to avoid losing sales.")
+        insights.append(f"{len(low_stock)} item(s) low on stock: {items}")
+        recommendations.append(f"Restock {items} soon to avoid losing sales.")
 
     if profit_m > 0:
-        insights.append(f"✅ **This month is profitable** — net profit of ₹{profit_m:,.0f}.")
+        insights.append(f"This month is profitable - net profit of Rs {profit_m:,.0f}.")
     elif profit_m < 0:
-        insights.append(f"🔴 **This month is loss-making** — net loss of ₹{abs(profit_m):,.0f}.")
-        recommendations.append("🚨 You are losing money this month. Immediate cost review recommended.")
+        insights.append(f"This month is loss-making - net loss of Rs {abs(profit_m):,.0f}.")
+        recommendations.append("You are losing money this month. Immediate cost review recommended.")
     else:
-        insights.append("➡️ **Breaking even this month.**")
+        insights.append("Breaking even this month.")
 
     return insights, recommendations
 
@@ -551,17 +551,17 @@ def send_report_email(to_email, business_name, business_id, period, report_type=
         msg            = MIMEMultipart()
         msg["From"]    = SMTP_EMAIL
         msg["To"]      = to_email
-        msg["Subject"] = f"📊 {business_name} — {period.replace('all','All Time').capitalize()} Business Report"
+        # ── no em dash, no emoji in subject ──
+        msg["Subject"] = f"ProfitPulse: {business_name} - {period.replace('all', 'All Time').capitalize()} Business Report"
 
-        body = f"""Hi,
-
-Please find attached your {period.replace('all','All Time')} business report for {business_name}.
-
-Generated on {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')} by ProfitPulse.
-
-Best regards,
-ProfitPulse
-        """
+        body = (
+            f"Hi,\n\n"
+            f"Please find attached your {period.replace('all', 'All Time')} "
+            f"business report for {business_name}.\n\n"
+            f"Generated on {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')} by ProfitPulse.\n\n"
+            f"Best regards,\n"
+            f"ProfitPulse\n"
+        )
         msg.attach(MIMEText(body, "plain"))
 
         part = MIMEBase("application", "octet-stream")
@@ -644,12 +644,17 @@ def generate_pdf_report(business_name, business_id, period):
     sales, expense, cogs, profit = calculate_profit(business_id, period)
     margin = (profit / sales * 100) if sales > 0 else 0
 
+    # ── sanitize business_name — remove any non-Latin-1 characters ──
+    def safe(text):
+        return text.encode("latin-1", errors="replace").decode("latin-1")
+
     class PDF(FPDF):
         def header(self):
             self.set_fill_color(41, 128, 185)
             self.set_text_color(255, 255, 255)
             self.set_font("Arial", "B", 16)
-            self.cell(0, 14, "ProfitPulse — Business Report",
+            # ── em dash replaced with plain hyphen ──
+            self.cell(0, 14, "ProfitPulse - Business Report",
                       border=0, ln=1, align="C", fill=True)
             self.ln(3)
 
@@ -668,7 +673,7 @@ def generate_pdf_report(business_name, business_id, period):
     pdf.set_font("Arial", "B", 11)
     pdf.cell(40, 8, "Business:", ln=0)
     pdf.set_font("Arial", "", 11)
-    pdf.cell(0, 8, business_name, ln=1)
+    pdf.cell(0, 8, safe(business_name), ln=1)
 
     pdf.set_font("Arial", "B", 11)
     pdf.cell(40, 8, "Period:", ln=0)
@@ -709,8 +714,8 @@ def generate_pdf_report(business_name, business_id, period):
         else:
             pdf.set_font("Arial", "", 11)
         fill = i % 2 == 0
-        pdf.cell(col_w[0], 9, label, border=1, fill=fill)
-        pdf.cell(col_w[1], 9, value, border=1, align="R", fill=fill, ln=1)
+        pdf.cell(col_w[0], 9, label,  border=1, fill=fill)
+        pdf.cell(col_w[1], 9, value,  border=1, align="R", fill=fill, ln=1)
         pdf.set_text_color(0, 0, 0)
 
     log_report(business_id, "PDF")
@@ -734,7 +739,8 @@ def generate_excel_report(business_name, business_id, period):
     margin = (profit / sales * 100) if sales > 0 else 0
 
     ws.merge_cells("A1:B1")
-    ws["A1"] = f"ProfitPulse Report — {business_name}"
+    # ── em dash replaced with plain hyphen ──
+    ws["A1"] = f"ProfitPulse Report - {business_name}"
     ws["A1"].font      = Font(bold=True, size=14)
     ws["A1"].alignment = CENTER
 
