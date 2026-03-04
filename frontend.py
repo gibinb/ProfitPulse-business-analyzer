@@ -6,6 +6,7 @@ from prophet.plot import plot_plotly
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score, mean_absolute_error
+import os
 
 from backend import (
     register_user, get_user, get_profile, get_user_role,
@@ -20,9 +21,14 @@ from backend import (
     generate_pdf_report, generate_excel_report,
     get_all_users, get_all_businesses, update_user_role,
     generate_ai_insights, send_report_email,
+    log_report, get_report_logs,
+    get_system_settings, update_system_setting,
+    get_accessible_businesses, grant_business_access,
+    revoke_business_access, get_user_access_list,
+    get_team_members, owner_create_team_member,
 )
 
-st.set_page_config(page_title="📈 Business Profit Analyzer", layout="wide")
+st.set_page_config(page_title="📈 ProfitPulse", layout="wide")
 
 PERIOD_MAP = {
     "Today":      "today",
@@ -43,8 +49,10 @@ def _pages_for_role(role):
     if role == "Staff":
         return ["Dashboard", "Transactions", "Profile"]
     if role == "Accountant":
-        return ["Dashboard", "Transactions", "Business Intelligence", "Profile"]
-    return ["Dashboard", "Transactions", "Inventory", "Business Intelligence", "Profile"]
+        return ["Dashboard", "Transactions", "Business Intelligence", "Reports", "Profile"]
+    # Owner
+    return ["Dashboard", "Transactions", "Inventory",
+            "Business Intelligence", "Reports", "Team", "Profile"]
 
 
 # ══════════════════════════════════════════════════════════════
@@ -60,8 +68,11 @@ def run_app():
     if not st.session_state.token:
         _, col, _ = st.columns([1, 2, 1])
         with col:
-            st.markdown("<h1 style='text-align:center;'>📊 Business Profit Analyzer</h1>",
-                        unsafe_allow_html=True)
+            st.markdown(
+                "<h1 style='text-align:center;'>📊 ProfitPulse</h1>"
+                "<p style='text-align:center;color:gray;'>Small Business Sales & Profit Analyzer</p>",
+                unsafe_allow_html=True,
+            )
 
             tab_login, tab_reg = st.tabs(["🔐 Login", "📝 Register"])
 
@@ -77,17 +88,12 @@ def run_app():
                         st.error("Invalid username or password")
 
             with tab_reg:
+                st.caption("🏢 Registering creates an Owner account. Staff & Accountants are added by the Owner from the Team page.")
                 new_user  = st.text_input("Username",                  key="r_u")
                 new_email = st.text_input("Email",                     key="r_e")
                 new_pass  = st.text_input("Password", type="password", key="r_p")
-
-                is_admin = st.checkbox("Register as Admin")
-                adm_code = ""
-                if is_admin:
-                    adm_code = st.text_input("Admin Code", type="password", key="r_a")
-
                 if st.button("Create Account"):
-                    if register_user(new_user, new_email, new_pass, adm_code):
+                    if register_user(new_user, new_email, new_pass):
                         st.success("Account created! Please login. 🎉")
                     else:
                         st.warning("Username already exists or invalid input.")
@@ -99,18 +105,36 @@ def run_app():
         st.session_state.token = None
         st.rerun()
 
-    role = get_user_role(username)
-    businesses = get_user_businesses(username)
+    role       = get_user_role(username)
+    businesses = get_accessible_businesses(username, role)
 
-    if not businesses and role != "Admin":
+    # ── No business handling by role ──────────────────────────
+    if role == "Owner" and not businesses:
         st.title("🏢 Create Your First Business")
+        st.info("Welcome to ProfitPulse! Start by creating your business.")
         bname = st.text_input("Business Name")
-        if st.button("Create Business"):
+        if st.button("Create Business ✅"):
             if bname:
                 create_business(username, bname)
                 st.rerun()
             else:
                 st.warning("Please enter a business name.")
+        if st.button("🚪 Logout", key="logout_nobiz"):
+            st.session_state.token = None
+            st.rerun()
+        return
+
+    if role in ("Accountant", "Staff") and not businesses:
+        st.title("⏳ Waiting for Business Access")
+        st.info("""
+        👋 Welcome to ProfitPulse! Your account is ready but you haven't
+        been assigned to any business yet.
+
+        Please ask your **Owner** to add you from their **Team** page.
+        """)
+        if st.button("🚪 Logout", key="logout_wait"):
+            st.session_state.token = None
+            st.rerun()
         return
 
     # ── Sidebar ────────────────────────────────────────────────
@@ -124,7 +148,8 @@ def run_app():
         selected_biz = None
         business_id  = None
 
-    if role != "Admin":
+    # Only Owner can add new businesses
+    if role == "Owner":
         if "add_biz" not in st.session_state:
             st.session_state.add_biz = False
         if st.sidebar.button("➕ Add New Business"):
@@ -143,7 +168,6 @@ def run_app():
     if st.sidebar.button("🚪 Logout"):
         st.session_state.token = None
         st.rerun()
-
 
     # ══════════════════════════════════════════════════════════
     #  DASHBOARD
@@ -165,7 +189,7 @@ def run_app():
 
         trend_rows = get_sales_trend(business_id, period)
         if trend_rows:
-            trend_df = pd.DataFrame(trend_rows, columns=["Date", "Revenue", "COGS"])
+            trend_df           = pd.DataFrame(trend_rows, columns=["Date", "Revenue", "COGS"])
             trend_df["Profit"] = trend_df["Revenue"] - trend_df["COGS"]
             st.subheader("📉 Sales Trend")
             fig = px.line(trend_df, x="Date", y=["Revenue", "COGS", "Profit"], markers=True)
@@ -305,179 +329,303 @@ def run_app():
     elif page == "Business Intelligence":
         st.title("📈 Business Intelligence")
 
-        # ── AI Business Insights ──────────────────────────────
-        st.subheader("🤖 AI Business Insights & Recommendations")
-        if st.button("Generate Insights 🔍"):
-            with st.spinner("Analyzing your business data..."):
-                insights, recommendations = generate_ai_insights(business_id, selected_biz)
+        tab_forecast, tab_insights, tab_expense = st.tabs([
+            "🔮 Forecasting", "🤖 AI Insights", "💸 Expense Analysis"
+        ])
 
-            st.markdown("#### 📊 Insights")
-            for item in insights:
-                st.markdown(item)
+        with tab_forecast:
+            st.subheader("📊 CSV Analytics & Forecasting")
+            st.caption("Upload a CSV file with historical sales data to generate forecasts and predictions.")
 
-            if recommendations:
-                st.markdown("#### 💡 Recommendations")
-                for rec in recommendations:
-                    st.markdown(rec)
-            else:
-                st.success("Your business looks healthy — no major recommendations at this time! ✅")
+            file = st.file_uploader("Upload Sales CSV", type=["csv"])
 
-        st.markdown("---")
+            if file:
+                df = pd.read_csv(file)
+                st.subheader("Data Preview")
+                st.dataframe(df.head())
 
-        # ── Expense breakdown ──
-        st.subheader("💸 Expense Category Breakdown")
-        cat_data = get_expense_by_category(business_id)
-        if cat_data:
-            cat_df = pd.DataFrame(cat_data, columns=["Category","Amount"])
-            fig    = px.pie(cat_df, names="Category", values="Amount", hole=0.4)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No expense data available.")
-
-        st.markdown("---")
-
-        # ── Report downloads ──
-        st.subheader("📄 Download Reports")
-        rep_period_label = st.selectbox("Report Period", list(PERIOD_MAP.keys()), index=2,
-                                         key="rep_period")
-        rep_period = PERIOD_MAP[rep_period_label]
-
-        col_pdf, col_xls = st.columns(2)
-        with col_pdf:
-            if st.button("Generate PDF Report"):
-                try:
-                    pdf_bytes = generate_pdf_report(selected_biz, business_id, rep_period)
-                    st.download_button(
-                        "⬇️ Download PDF",
-                        data=pdf_bytes,
-                        file_name=f"{selected_biz}_report.pdf",
-                        mime="application/pdf",
-                    )
-                except ImportError:
-                    st.error("Install fpdf2: pip install fpdf2")
-
-        with col_xls:
-            if st.button("Generate Excel Report"):
-                try:
-                    xl_bytes = generate_excel_report(selected_biz, business_id, rep_period)
-                    st.download_button(
-                        "⬇️ Download Excel",
-                        data=xl_bytes,
-                        file_name=f"{selected_biz}_report.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    )
-                except ImportError:
-                    st.error("Install openpyxl: pip install openpyxl")
-
-        st.markdown("---")
-
-        # ── Email Report ──────────────────────────────────────
-        st.subheader("📧 Email Report")
-
-        with st.expander("⚙️ How to set up Gmail for sending emails"):
-            st.markdown("""
-            1. Go to your **Google Account → Security**
-            2. Enable **2-Step Verification**
-            3. Go to **App Passwords** and generate one for "Mail"
-            4. Set these two environment variables before running the app:
-```
-            set SMTP_EMAIL=youremail@gmail.com
-            set SMTP_PASSWORD=your_16_digit_app_password
-```
-            """)
-
-        email_to     = st.text_input("Recipient Email Address", key="email_to")
-        email_period = st.selectbox("Report Period", list(PERIOD_MAP.keys()),
-                                     index=2, key="email_period")
-        email_type   = st.selectbox("Report Format", ["pdf", "excel"], key="email_type")
-
-        if st.button("📨 Send Report via Email"):
-            if email_to:
-                with st.spinner("Sending email..."):
-                    result = send_report_email(
-                        email_to, selected_biz, business_id,
-                        PERIOD_MAP[email_period], email_type
-                    )
-                if result is True:
-                    st.success(f"Report sent successfully to {email_to} ✅")
+                result, error = process_csv_profit(df)
+                if error:
+                    st.error(error)
                 else:
-                    st.error(f"Failed to send: {result}")
+                    df, daily    = result
+                    total_sales  = df["Revenue"].sum()
+                    total_profit = df["Profit"].sum()
+                    total_cogs   = df["COGS"].sum()
+                    margin       = (total_profit / total_sales * 100) if total_sales > 0 else 0
+
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Total Revenue", f"₹{total_sales:,.0f}")
+                    c2.metric("Total COGS",    f"₹{total_cogs:,.0f}")
+                    c3.metric("Total Profit",  f"₹{total_profit:,.0f}")
+                    c4.metric("Profit Margin", f"{margin:.2f}%")
+
+                    fig_trend = px.line(daily, x="Date",
+                                        y=["Revenue","COGS","Profit"], markers=True,
+                                        title="Revenue, COGS & Profit Trend")
+                    st.plotly_chart(fig_trend, use_container_width=True)
+
+                    st.subheader("🏷️ Product-wise Profit")
+                    prod_profit = df.groupby("Product")[["Profit"]].sum().reset_index()
+                    st.plotly_chart(
+                        px.bar(prod_profit, x="Product", y="Profit",
+                               color="Profit", text_auto=True),
+                        use_container_width=True,
+                    )
+
+                    st.subheader("🔮 7-Day Revenue Forecast")
+                    forecast_df = daily.rename(columns={"Date":"ds","Revenue":"y"})
+                    model       = Prophet(yearly_seasonality=False)
+                    model.fit(forecast_df)
+                    future   = model.make_future_dataframe(periods=7)
+                    forecast = model.predict(future)
+                    st.plotly_chart(plot_plotly(model, forecast), use_container_width=True)
+
+                    st.subheader("🧠 Profit Prediction (Regression)")
+                    X = df[["Revenue","COGS"]]
+                    y = df["Profit"]
+                    if len(X) >= 5:
+                        X_train, X_test, y_train, y_test = train_test_split(
+                            X, y, test_size=0.2, random_state=42
+                        )
+                        reg    = LinearRegression().fit(X_train, y_train)
+                        y_pred = reg.predict(X_test)
+                        st.write(f"**R² Score:** {r2_score(y_test, y_pred):.3f}")
+                        st.write(f"**MAE:** ₹{mean_absolute_error(y_test, y_pred):,.2f}")
+
+                        st.markdown("#### 🔢 Predict Custom Profit")
+                        p_rev  = st.number_input("Revenue (₹)", min_value=0.0, key="pred_rev")
+                        p_cogs = st.number_input("COGS (₹)",    min_value=0.0, key="pred_cogs")
+                        if st.button("Predict"):
+                            pred = reg.predict([[p_rev, p_cogs]])[0]
+                            st.success(f"Predicted Profit: ₹{pred:,.2f}")
+                    else:
+                        st.info("Upload at least 5 rows for regression analysis.")
+
+                    csv = df.to_csv(index=False).encode("utf-8")
+                    st.download_button("⬇️ Download Processed CSV", csv,
+                                       "profit_report.csv", "text/csv")
             else:
-                st.warning("Please enter a recipient email address.")
+                st.info("Upload a CSV with columns: Date, Product, Quantity, Selling_Price, Cost_Price")
 
-        st.markdown("---")
+        with tab_insights:
+            st.subheader("🤖 AI Business Insights & Recommendations")
+            st.caption("Analyzes your real business data and generates actionable insights.")
 
-        # ── CSV Analytics & Forecasting ───────────────────────
-        st.subheader("📊 CSV Analytics & Forecasting")
-        file = st.file_uploader("Upload Sales CSV", type=["csv"])
+            if st.button("Generate Insights 🔍"):
+                with st.spinner("Analyzing your business data..."):
+                    insights, recommendations = generate_ai_insights(business_id, selected_biz)
 
-        if file:
-            df = pd.read_csv(file)
-            st.subheader("Data Preview")
-            st.dataframe(df.head())
+                st.markdown("#### 📊 Insights")
+                for item in insights:
+                    st.markdown(item)
 
-            result, error = process_csv_profit(df)
-            if error:
-                st.error(error)
-                return
+                if recommendations:
+                    st.markdown("#### 💡 Recommendations")
+                    for rec in recommendations:
+                        st.markdown(rec)
+                else:
+                    st.success("Your business looks healthy — no major recommendations! ✅")
 
-            df, daily = result
-            total_sales  = df["Revenue"].sum()
-            total_profit = df["Profit"].sum()
-            total_cogs   = df["COGS"].sum()
-            margin       = (total_profit / total_sales * 100) if total_sales > 0 else 0
+        with tab_expense:
+            st.subheader("💸 Expense Category Breakdown")
+            cat_data = get_expense_by_category(business_id)
+            if cat_data:
+                cat_df = pd.DataFrame(cat_data, columns=["Category", "Amount"])
 
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Total Revenue", f"₹{total_sales:,.0f}")
-            c2.metric("Total COGS",    f"₹{total_cogs:,.0f}")
-            c3.metric("Total Profit",  f"₹{total_profit:,.0f}")
-            c4.metric("Profit Margin", f"{margin:.2f}%")
-
-            fig_trend = px.line(daily, x="Date", y=["Revenue","COGS","Profit"], markers=True)
-            st.plotly_chart(fig_trend, use_container_width=True)
-
-            st.subheader("🏷️ Product-wise Profit")
-            prod_profit = df.groupby("Product")[["Profit"]].sum().reset_index()
-            st.plotly_chart(
-                px.bar(prod_profit, x="Product", y="Profit", color="Profit", text_auto=True),
-                use_container_width=True,
-            )
-
-            forecast_df = daily.rename(columns={"Date":"ds","Revenue":"y"})
-            model = Prophet(yearly_seasonality=False)
-            model.fit(forecast_df)
-            future   = model.make_future_dataframe(periods=7)
-            forecast = model.predict(future)
-
-            st.subheader("🔮 7-Day Revenue Forecast")
-            st.plotly_chart(plot_plotly(model, forecast), use_container_width=True)
-
-            st.subheader("🧠 Profit Prediction (Regression)")
-            X = df[["Revenue","COGS"]]
-            y = df["Profit"]
-            if len(X) >= 5:
-                X_train, X_test, y_train, y_test = train_test_split(
-                    X, y, test_size=0.2, random_state=42
-                )
-                reg    = LinearRegression().fit(X_train, y_train)
-                y_pred = reg.predict(X_test)
-                st.write(f"**R² Score:** {r2_score(y_test, y_pred):.3f}")
-                st.write(f"**MAE:** ₹{mean_absolute_error(y_test, y_pred):,.2f}")
-
-                st.markdown("#### 🔢 Predict Custom Profit")
-                p_rev  = st.number_input("Revenue (₹)", min_value=0.0, key="pred_rev")
-                p_cogs = st.number_input("COGS (₹)",    min_value=0.0, key="pred_cogs")
-                if st.button("Predict"):
-                    pred = reg.predict([[p_rev, p_cogs]])[0]
-                    st.success(f"Predicted Profit: ₹{pred:,.2f}")
+                col_chart, col_table = st.columns([2, 1])
+                with col_chart:
+                    fig = px.pie(cat_df, names="Category", values="Amount",
+                                 hole=0.4, title="Expense Distribution")
+                    st.plotly_chart(fig, use_container_width=True)
+                with col_table:
+                    st.markdown("#### Breakdown")
+                    total_exp = cat_df["Amount"].sum()
+                    for _, row in cat_df.iterrows():
+                        pct = (row["Amount"] / total_exp * 100) if total_exp > 0 else 0
+                        st.markdown(f"**{row['Category']}** — ₹{row['Amount']:,.0f} `{pct:.1f}%`")
             else:
-                st.info("Upload at least 5 rows for regression analysis.")
+                st.info("No expense data available. Add some expenses first.")
 
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Download Processed CSV", csv,
-                               "profit_report.csv", "text/csv")
-        else:
-            st.info("Upload a CSV with columns: Date, Product, Quantity, Selling_Price, Cost_Price")
+
+    # ══════════════════════════════════════════════════════════
+    #  REPORTS
+    # ══════════════════════════════════════════════════════════
+    elif page == "Reports":
+        st.title("📄 Reports")
+
+        tab_download, tab_email = st.tabs(["⬇️ Download Reports", "📧 Email Report"])
+
+        with tab_download:
+            st.subheader("⬇️ Download Reports")
+            st.caption("Generate and download PDF or Excel reports for your business.")
+
+            rep_period_label = st.selectbox("Report Period", list(PERIOD_MAP.keys()),
+                                             index=2, key="rep_period")
+            rep_period = PERIOD_MAP[rep_period_label]
+
+            sales, expense, cogs, profit = calculate_profit(business_id, rep_period)
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("💰 Sales",   f"₹{sales:,.0f}")
+            m2.metric("🧾 Expense", f"₹{expense:,.0f}")
+            m3.metric("📦 COGS",    f"₹{cogs:,.0f}")
+            m4.metric("📈 Profit",  f"₹{profit:,.0f}")
+
+            st.markdown("---")
+            col_pdf, col_xls = st.columns(2)
+
+            with col_pdf:
+                st.markdown("#### 📄 PDF Report")
+                st.caption("Financial summary with formatted table.")
+                if st.button("Generate PDF Report"):
+                    try:
+                        pdf_bytes = generate_pdf_report(selected_biz, business_id, rep_period)
+                        st.download_button(
+                            "⬇️ Download PDF",
+                            data=pdf_bytes,
+                            file_name=f"{selected_biz}_report.pdf",
+                            mime="application/pdf",
+                        )
+                        st.success("PDF ready! Click above to download.")
+                    except ImportError:
+                        st.error("Install fpdf2: pip install fpdf2")
+
+            with col_xls:
+                st.markdown("#### 📊 Excel Report")
+                st.caption("3 sheets: Summary, Transactions, Inventory.")
+                if st.button("Generate Excel Report"):
+                    try:
+                        xl_bytes = generate_excel_report(selected_biz, business_id, rep_period)
+                        st.download_button(
+                            "⬇️ Download Excel",
+                            data=xl_bytes,
+                            file_name=f"{selected_biz}_report.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        )
+                        st.success("Excel ready! Click above to download.")
+                    except ImportError:
+                        st.error("Install openpyxl: pip install openpyxl")
+
+            st.markdown("---")
+            st.subheader("🕓 Your Report History")
+            my_logs = get_report_logs(business_id)
+            if my_logs:
+                log_df = pd.DataFrame(my_logs,
+                    columns=["ID","Business","Report Type","Location","Generated At"])
+                st.dataframe(log_df[["Report Type","Generated At"]],
+                             hide_index=True, use_container_width=True)
+            else:
+                st.info("No reports generated yet for this business.")
+
+        with tab_email:
+            st.subheader("📧 Send Report via Email")
+            st.caption("Send a PDF or Excel report directly to any email address.")
+
+            with st.expander("⚙️ How to set up Gmail for sending emails"):
+                st.markdown("""
+                1. Go to your **Google Account → Security**
+                2. Enable **2-Step Verification**
+                3. Go to **App Passwords** and generate one for "Mail"
+                4. Set these environment variables before running:
+```
+                set SMTP_EMAIL=youremail@gmail.com
+                set SMTP_PASSWORD=your_16_digit_app_password
+```
+                """)
+
+            smtp_ok = bool(os.getenv("SMTP_EMAIL") and os.getenv("SMTP_PASSWORD"))
+            if smtp_ok:
+                st.success("✅ Gmail is configured and ready to send.")
+            else:
+                st.warning("⚠️ Gmail not configured. See setup guide above.")
+
+            st.markdown("---")
+            email_to     = st.text_input("Recipient Email Address", key="email_to")
+            email_period = st.selectbox("Report Period", list(PERIOD_MAP.keys()),
+                                         index=2, key="email_period")
+            email_type   = st.selectbox("Report Format", ["pdf", "excel"], key="email_type")
+
+            if st.button("📨 Send Report via Email"):
+                if email_to:
+                    with st.spinner("Generating and sending report..."):
+                        result = send_report_email(
+                            email_to, selected_biz, business_id,
+                            PERIOD_MAP[email_period], email_type,
+                        )
+                    if result is True:
+                        st.success(f"Report sent successfully to **{email_to}** ✅")
+                        st.balloons()
+                    else:
+                        st.error(f"Failed to send: {result}")
+                else:
+                    st.warning("Please enter a recipient email address.")
+
+
+    # ══════════════════════════════════════════════════════════
+    #  TEAM  (Owner only)
+    # ══════════════════════════════════════════════════════════
+    elif page == "Team":
+        st.title("👥 Team Management")
+        st.caption(f"Managing team for **{selected_biz}**")
+
+        tab_create, tab_view = st.tabs(["➕ Add Team Member", "👥 My Team"])
+
+        # ── Tab 1: Create Team Member ─────────────────────────
+        with tab_create:
+            st.subheader("➕ Add New Team Member")
+            st.caption("Create an Accountant or Staff account — they will be instantly linked to this business.")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                tm_username = st.text_input("Username",               key="tm_user")
+                tm_email    = st.text_input("Email",                   key="tm_email")
+            with col2:
+                tm_password = st.text_input("Password", type="password", key="tm_pass")
+                tm_role     = st.selectbox("Role", ["Accountant", "Staff"], key="tm_role")
+
+            st.caption(f"📌 This member will be auto-assigned to **{selected_biz}**.")
+
+            if st.button("➕ Create Team Member", type="primary"):
+                if tm_username and tm_email and tm_password:
+                    success, msg = owner_create_team_member(
+                        tm_username, tm_email, tm_password,
+                        tm_role, business_id, username,
+                    )
+                    if success:
+                        st.success(f"✅ {msg} **{tm_username}** can now login as {tm_role}.")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {msg}")
+                else:
+                    st.warning("Please fill in all fields.")
+
+        # ── Tab 2: View & Manage Team ─────────────────────────
+        with tab_view:
+            st.subheader("👥 Current Team Members")
+            st.caption(f"All Accountants and Staff with access to **{selected_biz}**")
+
+            members = get_team_members(business_id)
+            if members:
+                team_df = pd.DataFrame(members,
+                    columns=["Username", "Email", "Role", "Added On"])
+                st.dataframe(team_df, hide_index=True, use_container_width=True)
+                st.metric("Total Team Members", len(members))
+
+                st.markdown("---")
+                st.subheader("❌ Remove Team Member")
+                st.caption("Revoking access prevents them from logging into this business.")
+
+                member_names = [m[0] for m in members]
+                remove_user  = st.selectbox("Select Member to Remove", member_names, key="remove_member")
+                remove_role  = next((m[2] for m in members if m[0] == remove_user), "")
+
+                st.warning(f"This will remove **{remove_user}** ({remove_role}) from **{selected_biz}**.")
+                if st.button("❌ Revoke Access", type="primary"):
+                    revoke_business_access(remove_user, business_id)
+                    st.success(f"Access revoked for {remove_user}.")
+                    st.rerun()
+            else:
+                st.info("No team members yet. Add Accountants or Staff from the 'Add Team Member' tab.")
 
 
     # ══════════════════════════════════════════════════════════
@@ -488,18 +636,22 @@ def run_app():
             st.error("Access denied.")
             return
 
-        st.title("🔧 Admin Dashboard")
-        tab_users, tab_biz = st.tabs(["👥 Users", "🏢 Businesses"])
+        st.title("🔧 Admin Dashboard — ProfitPulse")
+
+        tab_users, tab_biz, tab_reports, tab_settings = st.tabs([
+            "👥 Users", "🏢 Businesses", "📄 Report Logs", "⚙️ System Settings"
+        ])
 
         with tab_users:
             users = get_all_users()
             if users:
                 u_df = pd.DataFrame(users, columns=["Username","Email","Role"])
                 st.dataframe(u_df, hide_index=True, use_container_width=True)
+                st.metric("Total Users", len(users))
 
                 st.markdown("#### Change User Role")
-                target   = st.selectbox("Select User", [u[0] for u in users])
-                new_role = st.selectbox("New Role", ROLES)
+                target   = st.selectbox("Select User", [u[0] for u in users], key="role_target")
+                new_role = st.selectbox("New Role", ROLES, key="role_new")
                 if st.button("Update Role"):
                     update_user_role(target, new_role)
                     st.success(f"Role updated to {new_role}.")
@@ -516,6 +668,56 @@ def run_app():
                 st.metric("Total Businesses", len(all_biz))
             else:
                 st.info("No businesses found.")
+
+        with tab_reports:
+            st.subheader("📄 All Report Generation Logs")
+            logs = get_report_logs()
+            if logs:
+                log_df = pd.DataFrame(logs,
+                    columns=["ID","Business","Report Type","Location","Generated At"])
+                st.dataframe(log_df, hide_index=True, use_container_width=True)
+                st.metric("Total Reports Generated", len(logs))
+
+                col1, col2 = st.columns(2)
+                pdf_count   = sum(1 for l in logs if l[2] == "PDF")
+                excel_count = sum(1 for l in logs if l[2] == "Excel")
+                col1.metric("📄 PDF Reports",   pdf_count)
+                col2.metric("📊 Excel Reports", excel_count)
+            else:
+                st.info("No reports have been generated yet.")
+
+        with tab_settings:
+            st.subheader("⚙️ System Settings")
+            settings = get_system_settings()
+
+            st.markdown("#### 🏷️ Application")
+            app_name = st.text_input(
+                "Application Name",
+                value=settings.get("app_name", "ProfitPulse"),
+            )
+            max_biz = st.number_input(
+                "Max Businesses per User",
+                min_value=1, max_value=20,
+                value=int(settings.get("max_businesses", "5")),
+            )
+
+            st.markdown("#### 📊 Data Quality Monitor")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("👥 Total Users",       len(get_all_users()))
+            m2.metric("🏢 Total Businesses",  len(get_all_businesses()))
+            m3.metric("📄 Reports Generated", len(get_report_logs()))
+
+            st.markdown("#### 📧 Email Configuration")
+            smtp_configured = bool(os.getenv("SMTP_EMAIL") and os.getenv("SMTP_PASSWORD"))
+            if smtp_configured:
+                st.success("✅ SMTP Email is configured and ready.")
+            else:
+                st.warning("⚠️ SMTP not configured. Set SMTP_EMAIL and SMTP_PASSWORD.")
+
+            if st.button("💾 Save Settings"):
+                update_system_setting("app_name",       app_name)
+                update_system_setting("max_businesses", str(max_biz))
+                st.success("Settings saved successfully ✅")
 
 
     # ══════════════════════════════════════════════════════════
