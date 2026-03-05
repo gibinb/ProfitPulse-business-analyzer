@@ -521,24 +521,6 @@ def run_app():
             st.subheader("📧 Send Report via Email")
             st.caption("Send a PDF or Excel report directly to any email address.")
 
-            with st.expander("⚙️ How to set up Gmail for sending emails"):
-                st.markdown("""
-                1. Go to your **Google Account → Security**
-                2. Enable **2-Step Verification**
-                3. Go to **App Passwords** and generate one for "Mail"
-                4. Set these environment variables before running:
-```
-                set SMTP_EMAIL=youremail@gmail.com
-                set SMTP_PASSWORD=your_16_digit_app_password
-```
-                """)
-
-            smtp_ok = bool(os.getenv("SMTP_EMAIL") and os.getenv("SMTP_PASSWORD"))
-            if smtp_ok:
-                st.success("✅ Gmail is configured and ready to send.")
-            else:
-                st.warning("⚠️ Gmail not configured. See setup guide above.")
-
             st.markdown("---")
             email_to     = st.text_input("Recipient Email Address", key="email_to")
             email_period = st.selectbox("Report Period", list(PERIOD_MAP.keys()),
@@ -554,7 +536,6 @@ def run_app():
                         )
                     if result is True:
                         st.success(f"Report sent successfully to **{email_to}** ✅")
-                        st.balloons()
                     else:
                         st.error(f"Failed to send: {result}")
                 else:
