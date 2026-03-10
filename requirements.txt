@@ -1,9 +1,10 @@
 streamlit
+bcrypt
+pyjwt
 pandas
 plotly
 prophet
 scikit-learn
-bcrypt
-PyJWT
 fpdf2
 openpyxl
+psycopg2-binary

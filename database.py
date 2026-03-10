@@ -1,12 +1,8 @@
-import sqlite3
-
-DB_NAME = "profitpulse.db"
+import os
+import psycopg2
 
 def get_connection():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    return psycopg2.connect(os.getenv("DATABASE_URL"))
 
 
 def initialize_database():
@@ -16,28 +12,28 @@ def initialize_database():
     # ───────────────── USERS ─────────────────
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS users (
-        username TEXT PRIMARY KEY,
-        gmail    TEXT,
-        password BLOB,
-        role     TEXT DEFAULT 'Owner'
+        username   TEXT PRIMARY KEY,
+        gmail      TEXT,
+        password   TEXT,
+        role       TEXT DEFAULT 'Owner'
     )
     """)
 
     # ───────────────── BUSINESS ─────────────────
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS business (
-        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        id             SERIAL PRIMARY KEY,
         owner_username TEXT,
         business_name  TEXT,
         created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(owner_username) REFERENCES users(username)
+        FOREIGN KEY (owner_username) REFERENCES users(username)
     )
     """)
 
     # ───────────────── TRANSACTIONS ─────────────────
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS transactions (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        id          SERIAL PRIMARY KEY,
         username    TEXT,
         type        TEXT,
         amount      REAL,
@@ -46,50 +42,50 @@ def initialize_database():
         category    TEXT,
         product     TEXT,
         quantity    INTEGER DEFAULT 0,
-        txn_date    DATE,
+        txn_date    TEXT,
         notes       TEXT,
         created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(business_id) REFERENCES business(id)
+        FOREIGN KEY (business_id) REFERENCES business(id)
     )
     """)
 
     # ───────────────── INVENTORY ─────────────────
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS inventory (
-        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        id                  SERIAL PRIMARY KEY,
         username            TEXT,
         product             TEXT,
         quantity            INTEGER,
         unit_cost           REAL,
-        purchase_date       DATE,
+        purchase_date       TEXT,
         business_id         INTEGER,
         low_stock_threshold INTEGER DEFAULT 5,
-        FOREIGN KEY(business_id) REFERENCES business(id)
+        FOREIGN KEY (business_id) REFERENCES business(id)
     )
     """)
 
     # ───────────────── INVENTORY MOVEMENTS ─────────────────
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS inventory_movements (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        id            SERIAL PRIMARY KEY,
         business_id   INTEGER,
         product       TEXT,
         change_qty    INTEGER,
         movement_type TEXT,
         movement_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(business_id) REFERENCES business(id)
+        FOREIGN KEY (business_id) REFERENCES business(id)
     )
     """)
 
     # ───────────────── REPORTS LOG ─────────────────
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS reports (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        id           SERIAL PRIMARY KEY,
         business_id  INTEGER,
         report_type  TEXT,
         file_url     TEXT,
         generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(business_id) REFERENCES business(id)
+        FOREIGN KEY (business_id) REFERENCES business(id)
     )
     """)
 
@@ -104,13 +100,13 @@ def initialize_database():
     # ───────────────── BUSINESS ACCESS ─────────────────
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS business_access (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        id          SERIAL PRIMARY KEY,
         username    TEXT,
         business_id INTEGER,
         granted_by  TEXT,
         granted_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(username)    REFERENCES users(username),
-        FOREIGN KEY(business_id) REFERENCES business(id)
+        FOREIGN KEY (username)    REFERENCES users(username),
+        FOREIGN KEY (business_id) REFERENCES business(id)
     )
     """)
 
