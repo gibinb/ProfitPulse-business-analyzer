@@ -169,6 +169,8 @@ def run_app():
         st.session_state.token = None
         st.rerun()
 
+    st.sidebar.caption("📊 ProfitPulse v1.0")
+
     # ══════════════════════════════════════════════════════════
     #  DASHBOARD
     # ══════════════════════════════════════════════════════════
@@ -551,7 +553,6 @@ def run_app():
 
         tab_create, tab_view = st.tabs(["➕ Add Team Member", "👥 My Team"])
 
-        # ── Tab 1: Create Team Member ─────────────────────────
         with tab_create:
             st.subheader("➕ Add New Team Member")
             st.caption("Create an Accountant or Staff account — they will be instantly linked to this business.")
@@ -580,7 +581,6 @@ def run_app():
                 else:
                     st.warning("Please fill in all fields.")
 
-        # ── Tab 2: View & Manage Team ─────────────────────────
         with tab_view:
             st.subheader("👥 Current Team Members")
             st.caption(f"All Accountants and Staff with access to **{selected_biz}**")
@@ -617,7 +617,7 @@ def run_app():
             st.error("Access denied.")
             return
 
-        st.title("🔧 Admin Dashboard — ProfitPulse")
+        st.title("🔧 Admin Dashboard - ProfitPulse")
 
         tab_users, tab_biz, tab_reports, tab_settings = st.tabs([
             "👥 Users", "🏢 Businesses", "📄 Report Logs", "⚙️ System Settings"
