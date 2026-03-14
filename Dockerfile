@@ -1,14 +1,17 @@
-# Use official Python 3.13 base image
-FROM python:3.13
+# Use official Python 3.13 slim image (smaller & faster)
+FROM python:3.13-slim
 
 # Set working directory inside the container
 WORKDIR /app
 
-# Copy all your project files into the container
-COPY . .
+# Copy requirements first (better layer caching)
+COPY requirements.txt .
 
 # Install all dependencies
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy all project files
+COPY . .
 
 # Tell Docker which port Streamlit runs on
 EXPOSE 8501
