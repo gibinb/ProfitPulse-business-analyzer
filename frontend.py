@@ -93,7 +93,6 @@ def run_app():
                         st.error("Invalid username or password")
 
             with tab_reg:
-                st.caption("🏢 Registering creates an Owner account. Staff & Accountants are added by the Owner from the Team page.")
                 new_user  = st.text_input("Username",                  key="r_u")
                 new_email = st.text_input("Email",                     key="r_e")
                 new_pass  = st.text_input("Password", type="password", key="r_p")
@@ -175,8 +174,6 @@ def run_app():
         log_logout(username)
         st.session_state.token = None
         st.rerun()
-
-    st.sidebar.caption("📊 ProfitPulse v1.0")
 
     # ══════════════════════════════════════════════════════════
     #  DASHBOARD
