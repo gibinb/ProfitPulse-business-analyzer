@@ -2,7 +2,9 @@ import os
 import psycopg2
 
 def get_connection():
-    url = os.getenv("DATABASE_URL") or "postgresql://postgres.efzvoxzkeppzkkwygtra:iL8pn4oiZc9N3lnd@aws-1-ap-northeast-2.pooler.supabase.com:5432/postgres"
+    url = os.getenv("DATABASE_URL")
+    if not url:
+        raise ValueError("DATABASE_URL environment variable is not set!")
     return psycopg2.connect(url)
 
 def initialize_database():
