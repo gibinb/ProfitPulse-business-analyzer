@@ -5,7 +5,7 @@ def get_connection():
     url = os.getenv("DATABASE_URL")
     if not url:
         raise ValueError("DATABASE_URL environment variable is not set!")
-    return psycopg2.connect(url)
+    return psycopg2.connect(url, sslmode="require")
 
 def initialize_database():
     conn   = get_connection()
