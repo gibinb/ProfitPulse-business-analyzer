@@ -26,6 +26,8 @@ from backend import (
     get_accessible_businesses, grant_business_access,
     revoke_business_access, get_user_access_list,
     get_team_members, owner_create_team_member,
+    delete_user, change_user_password,
+    log_login, log_logout, get_login_logs,
 )
 
 st.set_page_config(page_title="📈 ProfitPulse", layout="wide")
@@ -50,9 +52,11 @@ def _pages_for_role(role):
         return ["Dashboard", "Transactions", "Profile"]
     if role == "Accountant":
         return ["Dashboard", "Transactions", "Business Intelligence", "Reports", "Profile"]
-    # Owner
+    # Owner — Team commented out for now
     return ["Dashboard", "Transactions", "Inventory",
-            "Business Intelligence", "Reports", "Team", "Profile"]
+            "Business Intelligence", "Reports",
+            # "Team",  # TODO: uncomment when Team feature is ready
+            "Profile"]
 
 
 # ══════════════════════════════════════════════════════════════
@@ -83,6 +87,7 @@ def run_app():
                     user = get_user(username)
                     if user and check_password(password, user[1]):
                         st.session_state.token = create_token(username)
+                        log_login(username)
                         st.rerun()
                     else:
                         st.error("Invalid username or password")
@@ -120,6 +125,7 @@ def run_app():
             else:
                 st.warning("Please enter a business name.")
         if st.button("🚪 Logout", key="logout_nobiz"):
+            log_logout(username)
             st.session_state.token = None
             st.rerun()
         return
@@ -133,6 +139,7 @@ def run_app():
         Please ask your **Owner** to add you from their **Team** page.
         """)
         if st.button("🚪 Logout", key="logout_wait"):
+            log_logout(username)
             st.session_state.token = None
             st.rerun()
         return
@@ -148,7 +155,6 @@ def run_app():
         selected_biz = None
         business_id  = None
 
-    # Only Owner can add new businesses
     if role == "Owner":
         if "add_biz" not in st.session_state:
             st.session_state.add_biz = False
@@ -166,6 +172,7 @@ def run_app():
     page  = st.sidebar.radio("Navigation", pages)
 
     if st.sidebar.button("🚪 Logout"):
+        log_logout(username)
         st.session_state.token = None
         st.rerun()
 
@@ -331,8 +338,13 @@ def run_app():
     elif page == "Business Intelligence":
         st.title("📈 Business Intelligence")
 
-        tab_forecast, tab_insights, tab_expense = st.tabs([
-            "🔮 Forecasting", "🤖 AI Insights", "💸 Expense Analysis"
+        # AI Insights tab commented out for now
+        # tab_forecast, tab_insights, tab_expense = st.tabs([
+        #     "🔮 Forecasting", "🤖 AI Insights", "💸 Expense Analysis"
+        # ])
+        tab_forecast, tab_expense = st.tabs([
+            "🔮 Forecasting", "💸 Expense Analysis",
+            # "🤖 AI Insights",  # TODO: uncomment when AI Insights is ready
         ])
 
         with tab_forecast:
@@ -410,24 +422,22 @@ def run_app():
             else:
                 st.info("Upload a CSV with columns: Date, Product, Quantity, Selling_Price, Cost_Price")
 
-        with tab_insights:
-            st.subheader("🤖 AI Business Insights & Recommendations")
-            st.caption("Analyzes your real business data and generates actionable insights.")
-
-            if st.button("Generate Insights 🔍"):
-                with st.spinner("Analyzing your business data..."):
-                    insights, recommendations = generate_ai_insights(business_id, selected_biz)
-
-                st.markdown("#### 📊 Insights")
-                for item in insights:
-                    st.markdown(item)
-
-                if recommendations:
-                    st.markdown("#### 💡 Recommendations")
-                    for rec in recommendations:
-                        st.markdown(rec)
-                else:
-                    st.success("Your business looks healthy — no major recommendations! ✅")
+        # ── AI Insights (commented out) ──────────────────────
+        # with tab_insights:
+        #     st.subheader("🤖 AI Business Insights & Recommendations")
+        #     st.caption("Analyzes your real business data and generates actionable insights.")
+        #     if st.button("Generate Insights 🔍"):
+        #         with st.spinner("Analyzing your business data..."):
+        #             insights, recommendations = generate_ai_insights(business_id, selected_biz)
+        #         st.markdown("#### 📊 Insights")
+        #         for item in insights:
+        #             st.markdown(item)
+        #         if recommendations:
+        #             st.markdown("#### 💡 Recommendations")
+        #             for rec in recommendations:
+        #                 st.markdown(rec)
+        #         else:
+        #             st.success("Your business looks healthy - no major recommendations! ✅")
 
         with tab_expense:
             st.subheader("💸 Expense Category Breakdown")
@@ -456,7 +466,10 @@ def run_app():
     elif page == "Reports":
         st.title("📄 Reports")
 
-        tab_download, tab_email = st.tabs(["⬇️ Download Reports", "📧 Email Report"])
+        # Email Report tab commented out for now
+        # tab_download, tab_email = st.tabs(["⬇️ Download Reports", "📧 Email Report"])
+        (tab_download,) = st.tabs(["⬇️ Download Reports"])
+        # "📧 Email Report",  # TODO: uncomment when Email Report is ready
 
         with tab_download:
             st.subheader("⬇️ Download Reports")
@@ -519,94 +532,62 @@ def run_app():
             else:
                 st.info("No reports generated yet for this business.")
 
-        with tab_email:
-            st.subheader("📧 Send Report via Email")
-            st.caption("Send a PDF or Excel report directly to any email address.")
-
-            st.markdown("---")
-            email_to     = st.text_input("Recipient Email Address", key="email_to")
-            email_period = st.selectbox("Report Period", list(PERIOD_MAP.keys()),
-                                         index=2, key="email_period")
-            email_type   = st.selectbox("Report Format", ["pdf", "excel"], key="email_type")
-
-            if st.button("📨 Send Report via Email"):
-                if email_to:
-                    with st.spinner("Generating and sending report..."):
-                        result = send_report_email(
-                            email_to, selected_biz, business_id,
-                            PERIOD_MAP[email_period], email_type,
-                        )
-                    if result is True:
-                        st.success(f"Report sent successfully to **{email_to}** ✅")
-                    else:
-                        st.error(f"Failed to send: {result}")
-                else:
-                    st.warning("Please enter a recipient email address.")
+        # ── Email Report (commented out) ─────────────────────
+        # with tab_email:
+        #     st.subheader("📧 Send Report via Email")
+        #     email_to     = st.text_input("Recipient Email Address", key="email_to")
+        #     email_period = st.selectbox("Report Period", list(PERIOD_MAP.keys()), index=2, key="email_period")
+        #     email_type   = st.selectbox("Report Format", ["pdf", "excel"], key="email_type")
+        #     if st.button("📨 Send Report via Email"):
+        #         if email_to:
+        #             with st.spinner("Generating and sending report..."):
+        #                 result = send_report_email(email_to, selected_biz, business_id, PERIOD_MAP[email_period], email_type)
+        #             if result is True:
+        #                 st.success(f"Report sent successfully to **{email_to}** ✅")
+        #             else:
+        #                 st.error(f"Failed to send: {result}")
+        #         else:
+        #             st.warning("Please enter a recipient email address.")
 
 
     # ══════════════════════════════════════════════════════════
-    #  TEAM  (Owner only)
+    #  TEAM (commented out — uncomment when ready)
     # ══════════════════════════════════════════════════════════
-    elif page == "Team":
-        st.title("👥 Team Management")
-        st.caption(f"Managing team for **{selected_biz}**")
-
-        tab_create, tab_view = st.tabs(["➕ Add Team Member", "👥 My Team"])
-
-        with tab_create:
-            st.subheader("➕ Add New Team Member")
-            st.caption("Create an Accountant or Staff account — they will be instantly linked to this business.")
-
-            col1, col2 = st.columns(2)
-            with col1:
-                tm_username = st.text_input("Username",               key="tm_user")
-                tm_email    = st.text_input("Email",                   key="tm_email")
-            with col2:
-                tm_password = st.text_input("Password", type="password", key="tm_pass")
-                tm_role     = st.selectbox("Role", ["Accountant", "Staff"], key="tm_role")
-
-            st.caption(f"📌 This member will be auto-assigned to **{selected_biz}**.")
-
-            if st.button("➕ Create Team Member", type="primary"):
-                if tm_username and tm_email and tm_password:
-                    success, msg = owner_create_team_member(
-                        tm_username, tm_email, tm_password,
-                        tm_role, business_id, username,
-                    )
-                    if success:
-                        st.success(f"✅ {msg} **{tm_username}** can now login as {tm_role}.")
-                        st.rerun()
-                    else:
-                        st.error(f"❌ {msg}")
-                else:
-                    st.warning("Please fill in all fields.")
-
-        with tab_view:
-            st.subheader("👥 Current Team Members")
-            st.caption(f"All Accountants and Staff with access to **{selected_biz}**")
-
-            members = get_team_members(business_id)
-            if members:
-                team_df = pd.DataFrame(members,
-                    columns=["Username", "Email", "Role", "Added On"])
-                st.dataframe(team_df, hide_index=True, use_container_width=True)
-                st.metric("Total Team Members", len(members))
-
-                st.markdown("---")
-                st.subheader("❌ Remove Team Member")
-                st.caption("Revoking access prevents them from logging into this business.")
-
-                member_names = [m[0] for m in members]
-                remove_user  = st.selectbox("Select Member to Remove", member_names, key="remove_member")
-                remove_role  = next((m[2] for m in members if m[0] == remove_user), "")
-
-                st.warning(f"This will remove **{remove_user}** ({remove_role}) from **{selected_biz}**.")
-                if st.button("❌ Revoke Access", type="primary"):
-                    revoke_business_access(remove_user, business_id)
-                    st.success(f"Access revoked for {remove_user}.")
-                    st.rerun()
-            else:
-                st.info("No team members yet. Add Accountants or Staff from the 'Add Team Member' tab.")
+    # elif page == "Team":
+    #     st.title("👥 Team Management")
+    #     st.caption(f"Managing team for **{selected_biz}**")
+    #     tab_create, tab_view = st.tabs(["➕ Add Team Member", "👥 My Team"])
+    #     with tab_create:
+    #         col1, col2 = st.columns(2)
+    #         with col1:
+    #             tm_username = st.text_input("Username", key="tm_user")
+    #             tm_email    = st.text_input("Email",    key="tm_email")
+    #         with col2:
+    #             tm_password = st.text_input("Password", type="password", key="tm_pass")
+    #             tm_role     = st.selectbox("Role", ["Accountant", "Staff"], key="tm_role")
+    #         if st.button("➕ Create Team Member", type="primary"):
+    #             if tm_username and tm_email and tm_password:
+    #                 success, msg = owner_create_team_member(tm_username, tm_email, tm_password, tm_role, business_id, username)
+    #                 if success:
+    #                     st.success(f"✅ {msg}")
+    #                     st.rerun()
+    #                 else:
+    #                     st.error(f"❌ {msg}")
+    #             else:
+    #                 st.warning("Please fill in all fields.")
+    #     with tab_view:
+    #         members = get_team_members(business_id)
+    #         if members:
+    #             team_df = pd.DataFrame(members, columns=["Username", "Email", "Role", "Added On"])
+    #             st.dataframe(team_df, hide_index=True, use_container_width=True)
+    #             member_names = [m[0] for m in members]
+    #             remove_user  = st.selectbox("Select Member to Remove", member_names, key="remove_member")
+    #             if st.button("❌ Revoke Access", type="primary"):
+    #                 revoke_business_access(remove_user, business_id)
+    #                 st.success(f"Access revoked for {remove_user}.")
+    #                 st.rerun()
+    #         else:
+    #             st.info("No team members yet.")
 
 
     # ══════════════════════════════════════════════════════════
@@ -619,27 +600,73 @@ def run_app():
 
         st.title("🔧 Admin Dashboard - ProfitPulse")
 
-        tab_users, tab_biz, tab_reports, tab_settings = st.tabs([
-            "👥 Users", "🏢 Businesses", "📄 Report Logs", "⚙️ System Settings"
+        tab_users, tab_biz, tab_reports, tab_logs, tab_settings = st.tabs([
+            "👥 Users", "🏢 Businesses", "📄 Report Logs", "🕐 Login History", "⚙️ System Settings"
         ])
 
+        # ── Users Tab ─────────────────────────────────────────
         with tab_users:
             users = get_all_users()
             if users:
-                u_df = pd.DataFrame(users, columns=["Username","Email","Role"])
+                u_df = pd.DataFrame(users, columns=["Username", "Email", "Role"])
                 st.dataframe(u_df, hide_index=True, use_container_width=True)
                 st.metric("Total Users", len(users))
 
-                st.markdown("#### Change User Role")
-                target   = st.selectbox("Select User", [u[0] for u in users], key="role_target")
-                new_role = st.selectbox("New Role", ROLES, key="role_new")
-                if st.button("Update Role"):
-                    update_user_role(target, new_role)
-                    st.success(f"Role updated to {new_role}.")
-                    st.rerun()
+                st.markdown("---")
+                col_left, col_right = st.columns(2)
+
+                with col_left:
+                    st.markdown("#### 🔄 Change User Role")
+                    target   = st.selectbox("Select User", [u[0] for u in users], key="role_target")
+                    new_role = st.selectbox("New Role", ROLES, key="role_new")
+                    if st.button("Update Role", key="btn_role"):
+                        update_user_role(target, new_role)
+                        st.success(f"Role updated to {new_role} for **{target}**.")
+                        st.rerun()
+
+                with col_right:
+                    st.markdown("#### 🔑 Change User Password")
+                    pwd_target  = st.selectbox("Select User", [u[0] for u in users], key="pwd_target")
+                    new_pwd     = st.text_input("New Password",     type="password", key="new_pwd")
+                    confirm_pwd = st.text_input("Confirm Password", type="password", key="confirm_pwd")
+                    if st.button("Change Password", key="btn_pwd"):
+                        if not new_pwd:
+                            st.warning("Please enter a new password.")
+                        elif new_pwd != confirm_pwd:
+                            st.error("Passwords do not match.")
+                        else:
+                            change_user_password(pwd_target, new_pwd)
+                            st.success(f"Password changed successfully for **{pwd_target}**.")
+
+                st.markdown("---")
+                st.markdown("#### 🗑️ Delete User")
+                st.caption("⚠️ Permanently deletes the user account. Their business data will remain.")
+
+                deletable_users = [u for u in users if u[0] != username]
+                if deletable_users:
+                    del_target = st.selectbox(
+                        "Select User to Delete",
+                        [u[0] for u in deletable_users],
+                        key="del_target"
+                    )
+                    del_info = next((u for u in users if u[0] == del_target), None)
+                    if del_info:
+                        st.warning(f"Deleting **{del_info[0]}** ({del_info[2]}) — {del_info[1]}")
+
+                    confirm_del = st.checkbox(f"I confirm deletion of {del_target}", key="confirm_del")
+                    if st.button("🗑️ Delete User", type="primary", key="btn_del"):
+                        if confirm_del:
+                            delete_user(del_target)
+                            st.success(f"User **{del_target}** has been deleted.")
+                            st.rerun()
+                        else:
+                            st.error("Please check the confirmation checkbox first.")
+                else:
+                    st.info("No other users to delete.")
             else:
                 st.info("No users found.")
 
+        # ── Businesses Tab ────────────────────────────────────
         with tab_biz:
             all_biz = get_all_businesses()
             if all_biz:
@@ -650,6 +677,7 @@ def run_app():
             else:
                 st.info("No businesses found.")
 
+        # ── Report Logs Tab ───────────────────────────────────
         with tab_reports:
             st.subheader("📄 All Report Generation Logs")
             logs = get_report_logs()
@@ -667,6 +695,48 @@ def run_app():
             else:
                 st.info("No reports have been generated yet.")
 
+        # ── Login History Tab ─────────────────────────────────
+        with tab_logs:
+            st.subheader("🕐 User Login / Logout History")
+            st.caption("Tracks every login and logout across all users.")
+
+            col_filter, col_limit = st.columns([2, 1])
+            with col_filter:
+                all_usernames   = ["All Users"] + [u[0] for u in get_all_users()]
+                filter_username = st.selectbox("Filter by User", all_usernames, key="log_filter")
+            with col_limit:
+                log_limit = st.number_input("Show last N records", min_value=10,
+                                             max_value=500, value=50, step=10, key="log_limit")
+
+            if filter_username == "All Users":
+                login_data = get_login_logs(limit=log_limit)
+            else:
+                login_data = get_login_logs(username=filter_username, limit=log_limit)
+
+            if login_data:
+                log_df = pd.DataFrame(login_data, columns=["Username", "Login Time", "Logout Time"])
+                log_df["Logout Time"] = log_df["Logout Time"].fillna("Active / not logged out")
+
+                def calc_duration(row):
+                    if row["Logout Time"] == "Active / not logged out":
+                        return "🟢 Active"
+                    try:
+                        diff = pd.to_datetime(row["Logout Time"]) - pd.to_datetime(row["Login Time"])
+                        mins = int(diff.total_seconds() / 60)
+                        return f"{mins} min" if mins < 60 else f"{mins//60}h {mins%60}m"
+                    except Exception:
+                        return "-"
+
+                log_df["Duration"] = log_df.apply(calc_duration, axis=1)
+                st.dataframe(log_df, hide_index=True, use_container_width=True)
+
+                c1, c2 = st.columns(2)
+                c1.metric("Total Sessions", len(login_data))
+                c2.metric("Currently Active", sum(1 for r in login_data if r[2] is None))
+            else:
+                st.info("No login history found.")
+
+        # ── System Settings Tab ───────────────────────────────
         with tab_settings:
             st.subheader("⚙️ System Settings")
             settings = get_system_settings()
@@ -712,3 +782,14 @@ def run_app():
             st.markdown(f"**Email:** {user[1]}")
             st.markdown(f"**Role:** `{user[2]}`")
             st.markdown(f"**Businesses:** {len(businesses)}")
+
+            st.markdown("---")
+            st.subheader("🕐 My Login History")
+            my_logs = get_login_logs(username=username, limit=10)
+            if my_logs:
+                my_log_df = pd.DataFrame(my_logs, columns=["Username", "Login Time", "Logout Time"])
+                my_log_df["Logout Time"] = my_log_df["Logout Time"].fillna("Current session")
+                st.dataframe(my_log_df[["Login Time", "Logout Time"]],
+                             hide_index=True, use_container_width=True)
+            else:
+                st.info("No login history yet.")

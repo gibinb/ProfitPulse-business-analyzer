@@ -112,5 +112,16 @@ def initialize_database():
     )
     """)
 
+
+    # ───────────────── LOGIN LOGS ─────────────────
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS login_logs (
+        id          SERIAL PRIMARY KEY,
+        username    TEXT,
+        login_time  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        logout_time TIMESTAMP DEFAULT NULL
+    )
+    """)
+
     conn.commit()
     conn.close()

@@ -106,6 +106,73 @@ def get_all_businesses():
     conn.close()
     return rows
 
+def delete_user(username):
+    """Delete a user and their access records. Does not delete their businesses/transactions."""
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM business_access WHERE username=%s", (username,))
+    cursor.execute("DELETE FROM login_logs WHERE username=%s", (username,))
+    cursor.execute("DELETE FROM users WHERE username=%s", (username,))
+    conn.commit(); conn.close()
+
+def change_user_password(username, new_password):
+    """Admin changes password for any user."""
+    conn   = get_connection()
+    cursor = conn.cursor()
+    hashed = hash_password(new_password).decode()
+    cursor.execute("UPDATE users SET password=%s WHERE username=%s", (hashed, username))
+    conn.commit(); conn.close()
+
+
+# ─────────────────────────── LOGIN LOGS ──────────────────────
+
+def log_login(username):
+    """Log user login time."""
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO login_logs (username, login_time) VALUES (%s, CURRENT_TIMESTAMP)",
+        (username,),
+    )
+    conn.commit(); conn.close()
+
+def log_logout(username):
+    """Log user logout time - updates the latest open session."""
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE login_logs SET logout_time = CURRENT_TIMESTAMP
+           WHERE id = (
+               SELECT id FROM login_logs
+               WHERE username=%s AND logout_time IS NULL
+               ORDER BY login_time DESC LIMIT 1
+           )""",
+        (username,),
+    )
+    conn.commit(); conn.close()
+
+def get_login_logs(username=None, limit=50):
+    """Get login/logout history."""
+    conn   = get_connection()
+    cursor = conn.cursor()
+    if username:
+        cursor.execute(
+            """SELECT username, login_time, logout_time
+               FROM login_logs WHERE username=%s
+               ORDER BY login_time DESC LIMIT %s""",
+            (username, limit),
+        )
+    else:
+        cursor.execute(
+            """SELECT username, login_time, logout_time
+               FROM login_logs
+               ORDER BY login_time DESC LIMIT %s""",
+            (limit,),
+        )
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
 
 # ─────────────────────────── BUSINESS ────────────────────────
 
