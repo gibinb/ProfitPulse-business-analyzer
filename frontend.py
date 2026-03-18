@@ -67,6 +67,8 @@ def run_app():
 
     if "token" not in st.session_state:
         st.session_state.token = None
+    if "admin_verified" not in st.session_state:
+        st.session_state.admin_verified = False
 
     # ──────────────────── LOGIN / REGISTER ────────────────────
     if not st.session_state.token:
@@ -93,6 +95,7 @@ def run_app():
                         st.error("Invalid username or password")
 
             with tab_reg:
+                st.caption("🏢 Registering creates an Owner account. Staff & Accountants are added by the Owner from the Team page.")
                 new_user  = st.text_input("Username",                  key="r_u")
                 new_email = st.text_input("Email",                     key="r_e")
                 new_pass  = st.text_input("Password", type="password", key="r_p")
@@ -126,6 +129,7 @@ def run_app():
         if st.button("🚪 Logout", key="logout_nobiz"):
             log_logout(username)
             st.session_state.token = None
+            st.session_state.admin_verified = False
             st.rerun()
         return
 
@@ -140,6 +144,7 @@ def run_app():
         if st.button("🚪 Logout", key="logout_wait"):
             log_logout(username)
             st.session_state.token = None
+            st.session_state.admin_verified = False
             st.rerun()
         return
 
@@ -173,7 +178,10 @@ def run_app():
     if st.sidebar.button("🚪 Logout"):
         log_logout(username)
         st.session_state.token = None
+        st.session_state.admin_verified = False
         st.rerun()
+
+    st.sidebar.caption("📊 ProfitPulse v1.0")
 
     # ══════════════════════════════════════════════════════════
     #  DASHBOARD
@@ -404,12 +412,14 @@ def run_app():
                         st.write(f"**R² Score:** {r2_score(y_test, y_pred):.3f}")
                         st.write(f"**MAE:** ₹{mean_absolute_error(y_test, y_pred):,.2f}")
 
-                        st.markdown("#### 🔢 Predict Custom Profit")
-                        p_rev  = st.number_input("Revenue (₹)", min_value=0.0, key="pred_rev")
-                        p_cogs = st.number_input("COGS (₹)",    min_value=0.0, key="pred_cogs")
-                        if st.button("Predict"):
-                            pred = reg.predict([[p_rev, p_cogs]])[0]
-                            st.success(f"Predicted Profit: ₹{pred:,.2f}")
+                        # ── Predict Custom Profit (commented out) ──
+                        # TODO: uncomment when ready
+                        # st.markdown("#### 🔢 Predict Custom Profit")
+                        # p_rev  = st.number_input("Revenue (₹)", min_value=0.0, key="pred_rev")
+                        # p_cogs = st.number_input("COGS (₹)",    min_value=0.0, key="pred_cogs")
+                        # if st.button("Predict"):
+                        #     pred = reg.predict([[p_rev, p_cogs]])[0]
+                        #     st.success(f"Predicted Profit: Rs{pred:,.2f}")
                     else:
                         st.info("Upload at least 5 rows for regression analysis.")
 
@@ -593,6 +603,35 @@ def run_app():
     elif page == "Admin":
         if role != "Admin":
             st.error("Access denied.")
+            return
+
+        # ── Secret Code Gate ──────────────────────────────────
+        ADMIN_SECRET = os.getenv("ADMIN_SECRET", "PROFITPULSE_ADMIN_2024")
+
+        if not st.session_state.admin_verified:
+            st.title("🔐 Admin Verification")
+            st.markdown("---")
+            _, col, _ = st.columns([1, 2, 1])
+            with col:
+                st.markdown(
+                    "<div style='text-align:center; padding: 20px;'>"
+                    "<h3>🛡️ Admin Access Required</h3>"
+                    "<p style='color:gray;'>Enter your admin secret code to access the dashboard.</p>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+                secret_input = st.text_input(
+                    "Secret Code", type="password", key="admin_secret_input",
+                    placeholder="Enter admin secret code..."
+                )
+                if st.button("🔓 Verify & Enter Dashboard", type="primary", use_container_width=True):
+                    if secret_input == ADMIN_SECRET:
+                        st.session_state.admin_verified = True
+                        st.success("✅ Verified! Redirecting to Admin Dashboard...")
+                        st.rerun()
+                    else:
+                        st.error("❌ Invalid secret code. Access denied.")
+                        log_login(f"{username}_failed_admin_verify")
             return
 
         st.title("🔧 Admin Dashboard - ProfitPulse")
