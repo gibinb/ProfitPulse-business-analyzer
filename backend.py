@@ -12,11 +12,18 @@ from email import encoders
 from database import get_connection
 
 # Secrets come ONLY from environment variables (never hardcode them).
+def _similar_env_names(keywords=("jwt", "secret", "admin", "database")):
+    """Names (NEVER values) of environment variables that look related."""
+    return sorted(k for k in os.environ if any(w in k.lower() for w in keywords))
+
+
 SECRET_KEY = os.getenv("JWT_SECRET")
 if not SECRET_KEY:
     raise RuntimeError(
         "JWT_SECRET environment variable is not set. "
-        "Set it in your .env file (local) or in Railway / HuggingFace secrets."
+        "Set it in your .env file (local) or in Railway / HuggingFace secrets. "
+        "The name must match exactly: capital letters, underscore, no spaces. "
+        f"Related variable names this app can see (names only): {_similar_env_names()!r}"
     )
 ADMIN_CODE = os.getenv("ADMIN_CODE", "")   # empty = nobody can self-register as Admin
 
