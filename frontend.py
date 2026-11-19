@@ -28,9 +28,32 @@ from backend import (
     get_team_members, owner_create_team_member,
     delete_user, change_user_password,
     log_login, log_logout, get_login_logs,
+    get_weekly_summary, get_monthly_summary,
+    upload_receipt_to_supabase,
+    get_login_status, record_failed_attempt, reset_failed_attempts,
+    admin_unlock_account, get_locked_accounts,
+    MAX_FAILED_ATTEMPTS, WARN_AFTER_ATTEMPTS, LOCKOUT_MINUTES,
 )
 
 st.set_page_config(page_title="📈 ProfitPulse", layout="wide")
+
+# ── Mobile-friendly styling (applies on screens up to 768px wide) ──
+st.markdown("""
+<style>
+@media (max-width: 768px) {
+    .block-container { padding: 1rem 0.8rem !important; }
+    .stButton > button { width: 100%; min-height: 46px; }
+    [data-testid="stMetric"] {
+        background: rgba(128,128,128,0.08);
+        border-radius: 8px;
+        padding: 10px 12px;
+        border-left: 4px solid #00BFA5;
+    }
+    .stTabs [data-baseweb="tab-list"] { flex-wrap: wrap; gap: 4px; }
+    [data-testid="stDataFrame"] { overflow-x: auto; }
+}
+</style>
+""", unsafe_allow_html=True)
 
 PERIOD_MAP = {
     "Today":      "today",
@@ -39,6 +62,60 @@ PERIOD_MAP = {
     "All Time":   "all",
 }
 ROLES = ["Owner", "Accountant", "Staff", "Admin"]
+
+MAX_RECEIPT_MB = 5
+
+
+def _render_summary(summary_rows, label_col, chart_title):
+    """Shows a colour-coded summary table and a profit bar chart."""
+    if not summary_rows:
+        st.info("No transaction data available yet.")
+        return
+
+    df = pd.DataFrame(
+        summary_rows,
+        columns=[label_col, "Sales (₹)", "Expense (₹)", "COGS (₹)", "Profit (₹)"],
+    )
+    df[label_col] = df[label_col].astype(str)
+
+    def _colour(v):
+        return "color: green; font-weight: bold" if v >= 0 else "color: red; font-weight: bold"
+
+    styler = df.style
+    # Styler.applymap was renamed to Styler.map in newer pandas versions
+    apply_cell = styler.map if hasattr(styler, "map") else styler.applymap
+    styler = apply_cell(_colour, subset=["Profit (₹)"])
+    styler = styler.format({c: "₹{:,.0f}" for c in df.columns[1:]})
+    st.dataframe(styler, hide_index=True, use_container_width=True)
+
+    chart_df = df.iloc[::-1]          # oldest -> newest, left to right
+    fig = px.bar(chart_df, x=label_col, y="Profit (₹)", color="Profit (₹)",
+                 color_continuous_scale=["red", "green"],
+                 color_continuous_midpoint=0, title=chart_title)
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _preview_receipt(uploaded):
+    """Small preview for image receipts (PDFs cannot be previewed)."""
+    if uploaded is not None and (uploaded.type or "").startswith("image/"):
+        st.image(uploaded, caption="Receipt preview", width=320)
+
+
+def _upload_if_any(uploaded, business_id):
+    """
+    Called when the user clicks Save. Uploads the receipt (if any) and returns
+    its URL. If the upload fails we warn but still let the transaction save.
+    """
+    if uploaded is None:
+        return None
+    if uploaded.size > MAX_RECEIPT_MB * 1024 * 1024:
+        st.warning(f"Receipt is larger than {MAX_RECEIPT_MB} MB - saved without receipt.")
+        return None
+    url, err = upload_receipt_to_supabase(uploaded.getvalue(), uploaded.name, business_id)
+    if err:
+        st.warning(f"Receipt could not be uploaded ({err}). Transaction saved without receipt.")
+        return None
+    return url
 
 
 # ══════════════════════════════════════════════════════════════
@@ -83,16 +160,44 @@ def run_app():
             tab_login, tab_reg = st.tabs(["🔐 Login", "📝 Register"])
 
             with tab_login:
-                username = st.text_input("Username", key="l_u")
-                password = st.text_input("Password", type="password", key="l_p")
+                login_input = st.text_input("Username or Email", key="l_u",
+                                            placeholder="Enter username or Gmail")
+                password    = st.text_input("Password", type="password", key="l_p")
                 if st.button("Login"):
-                    user = get_user(username)
-                    if user and check_password(password, user[1]):
-                        st.session_state.token = create_token(username)
-                        log_login(username)
-                        st.rerun()
+                    if not login_input or not password:
+                        st.warning("Please enter your username/email and password.")
                     else:
-                        st.error("Invalid username or password")
+                        # 1) Is the account locked? Check BEFORE touching the password.
+                        status = get_login_status(login_input)
+                        if status and status["is_locked"]:
+                            mins, secs = divmod(status["seconds_remaining"], 60)
+                            st.error(f"🔒 Account locked due to too many failed attempts. "
+                                     f"Try again in {mins} min {secs} sec.")
+                        else:
+                            user = get_user(login_input)
+                            if user and check_password(password, user[1]):
+                                # 2) Success: ALWAYS use the real username from the DB
+                                #    (the user may have typed their email).
+                                actual_username = user[0]
+                                reset_failed_attempts(actual_username)
+                                st.session_state.token = create_token(actual_username)
+                                log_login(actual_username)
+                                st.rerun()
+                            elif user:
+                                # 3) Wrong password for a real account: count it.
+                                count, now_locked = record_failed_attempt(user[0])
+                                remaining = MAX_FAILED_ATTEMPTS - count
+                                if now_locked:
+                                    st.error(f"🔒 Too many failed attempts. Account locked "
+                                             f"for {LOCKOUT_MINUTES} minutes.")
+                                elif count >= WARN_AFTER_ATTEMPTS:
+                                    st.error(f"❌ Wrong password. ⚠️ {remaining} attempt"
+                                             f"{'s' if remaining != 1 else ''} remaining "
+                                             f"before your account is locked.")
+                                else:
+                                    st.error("Invalid username or password")
+                            else:
+                                st.error("Invalid username or password")
 
             with tab_reg:
                 new_user  = st.text_input("Username",                  key="r_u")
@@ -102,7 +207,7 @@ def run_app():
                     if register_user(new_user, new_email, new_pass):
                         st.success("Account created! Please login. 🎉")
                     else:
-                        st.warning("Username already exists or invalid input.")
+                        st.warning("Username or email already exists, or input is invalid.")
         return
 
     # ──────────────────── AUTHENTICATED ───────────────────────
@@ -208,6 +313,18 @@ def run_app():
         else:
             st.info("No sales data for this period yet.")
 
+        # ── Weekly / Monthly summary ─────────────────────────
+        st.markdown("---")
+        st.subheader("📅 Period Summary")
+        tab_week, tab_month = st.tabs(["📆 Weekly Summary", "🗓️ Monthly Summary"])
+        with tab_week:
+            st.caption("Sales, expenses, COGS and profit for the last 12 weeks.")
+            _render_summary(get_weekly_summary(business_id), "Week Starting", "Weekly Profit")
+        with tab_month:
+            st.caption("Sales, expenses, COGS and profit for the last 12 months.")
+            _render_summary(get_monthly_summary(business_id), "Month", "Monthly Profit")
+        st.markdown("---")
+
         st.subheader("⚠️ Low Stock Alerts")
         low = get_low_stock(business_id)
         if low:
@@ -234,9 +351,15 @@ def run_app():
                 amount  = st.number_input("Total Sales Amount", min_value=0.0)
                 date    = st.date_input("Sale Date")
                 notes   = st.text_area("Notes (optional)", height=68)
+                receipt_file = st.file_uploader(
+                    "📎 Attach receipt / invoice (optional)",
+                    type=["jpg", "jpeg", "png", "pdf"], key="receipt_sale")
+                _preview_receipt(receipt_file)
                 if st.button("Save Sale ✅"):
                     if product:
-                        save_sales(username, business_id, product, qty, amount, date, notes)
+                        receipt_url = _upload_if_any(receipt_file, business_id)
+                        save_sales(username, business_id, product, qty, amount,
+                                   date, notes, receipt_url)
                         st.success("Sale saved & inventory updated!")
                     else:
                         st.warning("Please enter a product name.")
@@ -249,8 +372,14 @@ def run_app():
                     amount = st.number_input("Expense Amount", min_value=0.0)
                     date   = st.date_input("Expense Date")
                     notes  = st.text_area("Notes (optional)", height=68)
+                    receipt_file = st.file_uploader(
+                        "📎 Attach receipt / invoice (optional)",
+                        type=["jpg", "jpeg", "png", "pdf"], key="receipt_expense")
+                    _preview_receipt(receipt_file)
                     if st.button("Save Expense ✅"):
-                        save_expense(username, business_id, amount, cat, date, notes)
+                        receipt_url = _upload_if_any(receipt_file, business_id)
+                        save_expense(username, business_id, amount, cat, date,
+                                     notes, receipt_url)
                         st.success("Expense saved!")
 
         with tab_manage:
@@ -260,8 +389,12 @@ def run_app():
             rows = get_transactions(business_id, limit=100)
             if rows:
                 df = pd.DataFrame(rows,
-                    columns=["ID","Type","Amount","Category","Product","Qty","Date","Notes"])
-                st.dataframe(df, hide_index=True, use_container_width=True)
+                    columns=["ID","Type","Amount","Category","Product","Qty","Date","Notes","Receipt"])
+                st.dataframe(
+                    df, hide_index=True, use_container_width=True,
+                    column_config={"Receipt": st.column_config.LinkColumn(
+                        "Receipt", display_text="View 📎")},
+                )
 
                 if role != "Staff":
                     st.markdown("---")
@@ -603,7 +736,7 @@ def run_app():
             return
 
         # ── Secret Code Gate ──────────────────────────────────
-        ADMIN_SECRET = os.getenv("ADMIN_SECRET", "PROFITPULSE_ADMIN_2024")
+        ADMIN_SECRET = os.getenv("ADMIN_SECRET")   # no default: must be set on the server
 
         if not st.session_state.admin_verified:
             st.title("🔐 Admin Verification")
@@ -622,7 +755,9 @@ def run_app():
                     placeholder="Enter admin secret code..."
                 )
                 if st.button("🔓 Verify & Enter Dashboard", type="primary", use_container_width=True):
-                    if secret_input == ADMIN_SECRET:
+                    if not ADMIN_SECRET:
+                        st.error("❌ ADMIN_SECRET is not configured on the server.")
+                    elif secret_input == ADMIN_SECRET:
                         st.session_state.admin_verified = True
                         st.success("✅ Verified! Redirecting to Admin Dashboard...")
                         st.rerun()
@@ -696,6 +831,25 @@ def run_app():
                             st.error("Please check the confirmation checkbox first.")
                 else:
                     st.info("No other users to delete.")
+
+                # ── Locked accounts ───────────────────────────
+                st.markdown("---")
+                st.markdown("#### 🔓 Locked Accounts")
+                st.caption("Accounts locked after too many wrong passwords.")
+                locked = get_locked_accounts()
+                if locked:
+                    st.dataframe(
+                        pd.DataFrame(locked, columns=["Username", "Email", "Role",
+                                                      "Failed Attempts", "Locked Until (UTC)"]),
+                        hide_index=True, use_container_width=True)
+                    unlock_target = st.selectbox("Select account to unlock",
+                                                 [r[0] for r in locked], key="unlock_target")
+                    if st.button("🔓 Unlock Account", key="btn_unlock", type="primary"):
+                        admin_unlock_account(unlock_target)
+                        st.success(f"Account **{unlock_target}** has been unlocked.")
+                        st.rerun()
+                else:
+                    st.success("✅ No accounts are currently locked.")
             else:
                 st.info("No users found.")
 
@@ -797,6 +951,12 @@ def run_app():
                 st.success("✅ SMTP Email is configured and ready.")
             else:
                 st.warning("⚠️ SMTP not configured. Set SMTP_EMAIL and SMTP_PASSWORD.")
+
+            st.markdown("#### ☁️ Receipt Storage")
+            if os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_KEY"):
+                st.success("✅ Supabase Storage is configured for receipt uploads.")
+            else:
+                st.warning("⚠️ Receipt upload disabled. Set SUPABASE_URL and SUPABASE_KEY.")
 
             if st.button("💾 Save Settings"):
                 update_system_setting("app_name",       app_name)

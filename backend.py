@@ -11,8 +11,21 @@ from email.mime.text import MIMEText
 from email import encoders
 from database import get_connection
 
-SECRET_KEY = os.getenv("JWT_SECRET", "supersecretkey")
-ADMIN_CODE  = os.getenv("ADMIN_CODE",  "ADMIN2024")
+# Secrets come ONLY from environment variables (never hardcode them).
+SECRET_KEY = os.getenv("JWT_SECRET")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "JWT_SECRET environment variable is not set. "
+        "Set it in your .env file (local) or in Railway / HuggingFace secrets."
+    )
+ADMIN_CODE = os.getenv("ADMIN_CODE", "")   # empty = nobody can self-register as Admin
+
+RECEIPT_BUCKET = "receipts"                # Supabase Storage bucket name
+
+
+def _utcnow():
+    """Naive UTC datetime (matches PostgreSQL TIMESTAMP columns)."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
 
 
 # ─────────────────────────── AUTH ────────────────────────────
@@ -28,7 +41,7 @@ def check_password(password, hashed):
 def create_token(username):
     payload = {
         "username": username,
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=8),
+        "exp": _utcnow() + datetime.timedelta(hours=8),
     }
     return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
@@ -39,6 +52,158 @@ def verify_token(token):
         return None
 
 
+# ─────────────────────── ACCOUNT LOCKOUT ─────────────────────
+
+MAX_FAILED_ATTEMPTS = 5    # wrong passwords before the account locks
+WARN_AFTER_ATTEMPTS = 3    # start warning the user after this many
+LOCKOUT_MINUTES     = 5    # how long the account stays locked
+
+
+def get_login_status(username_or_email):
+    """
+    Returns None if no such user, otherwise a dict:
+      username, is_locked, failed_attempts, seconds_remaining
+    An expired lock is cleared automatically.
+    """
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT username, COALESCE(failed_attempts, 0), locked_until
+           FROM users WHERE username=%s OR LOWER(gmail)=LOWER(%s)
+           ORDER BY (username=%s) DESC LIMIT 1""",
+        (username_or_email, username_or_email, username_or_email),
+    )
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return None
+
+    username, failed, locked_until = row
+    now = _utcnow()
+
+    if locked_until and locked_until > now:
+        conn.close()
+        return {
+            "username":          username,
+            "is_locked":         True,
+            "failed_attempts":   failed,
+            "seconds_remaining": int((locked_until - now).total_seconds()),
+        }
+
+    if locked_until:                      # lock expired -> start fresh
+        cursor.execute(
+            "UPDATE users SET failed_attempts=0, locked_until=NULL WHERE username=%s",
+            (username,),
+        )
+        conn.commit()
+        failed = 0
+
+    conn.close()
+    return {"username": username, "is_locked": False,
+            "failed_attempts": failed, "seconds_remaining": 0}
+
+
+def record_failed_attempt(username):
+    """
+    Adds 1 to failed_attempts in a single atomic UPDATE and locks the account
+    when MAX_FAILED_ATTEMPTS is reached.
+    Returns (new_count, is_now_locked).
+    """
+    lock_until = _utcnow() + datetime.timedelta(minutes=LOCKOUT_MINUTES)
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE users
+           SET failed_attempts = COALESCE(failed_attempts, 0) + 1,
+               locked_until    = CASE WHEN COALESCE(failed_attempts, 0) + 1 >= %s
+                                      THEN %s ELSE locked_until END
+           WHERE username=%s
+           RETURNING failed_attempts""",
+        (MAX_FAILED_ATTEMPTS, lock_until, username),
+    )
+    row = cursor.fetchone()
+    conn.commit()
+    conn.close()
+    count = row[0] if row else 1
+    return count, count >= MAX_FAILED_ATTEMPTS
+
+
+def reset_failed_attempts(username):
+    """Clear the counter and any lock (used after a successful login)."""
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET failed_attempts=0, locked_until=NULL WHERE username=%s",
+        (username,),
+    )
+    conn.commit(); conn.close()
+
+
+def admin_unlock_account(username):
+    """Admin manually unlocks an account."""
+    reset_failed_attempts(username)
+
+
+def get_locked_accounts():
+    """All accounts that are locked right now (for the Admin dashboard)."""
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT username, gmail, role, failed_attempts, locked_until
+           FROM users WHERE locked_until IS NOT NULL AND locked_until > %s
+           ORDER BY locked_until DESC""",
+        (_utcnow(),),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+
+# ─────────────────────── RECEIPT UPLOAD ──────────────────────
+
+def upload_receipt_to_supabase(file_bytes, file_name, business_id):
+    """
+    Uploads a receipt (jpg/png/pdf) to the Supabase Storage bucket 'receipts'.
+    Returns (public_url, None) on success or (None, error_message) on failure.
+    Needs SUPABASE_URL and SUPABASE_KEY (service_role key) in the environment.
+    """
+    import mimetypes, re, uuid
+
+    base = os.getenv("SUPABASE_URL", "").rstrip("/")
+    key  = os.getenv("SUPABASE_KEY", "")
+    if not base or not key:
+        return None, "Supabase Storage is not configured."
+
+    ext = os.path.splitext(file_name)[1].lower()
+    if ext not in (".jpg", ".jpeg", ".png", ".pdf"):
+        return None, "Unsupported file type."
+
+    try:
+        import httpx
+    except ImportError:
+        return None, "httpx is not installed."
+
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(file_name))
+    path = (f"{business_id}/{_utcnow():%Y%m%d_%H%M%S}_"
+            f"{uuid.uuid4().hex[:8]}_{safe_name}")
+    content_type = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+
+    try:
+        resp = httpx.post(
+            f"{base}/storage/v1/object/{RECEIPT_BUCKET}/{path}",
+            content=file_bytes,
+            headers={"Authorization": f"Bearer {key}", "apikey": key,
+                     "Content-Type": content_type},
+            timeout=30,
+        )
+    except Exception as e:
+        return None, f"network error ({type(e).__name__})"
+
+    if resp.status_code in (200, 201):
+        return f"{base}/storage/v1/object/public/{RECEIPT_BUCKET}/{path}", None
+    return None, f"storage returned HTTP {resp.status_code}"
+
+
 # ─────────────────────────── USER ────────────────────────────
 
 def register_user(username, gmail, password, admin_code=""):
@@ -46,11 +211,15 @@ def register_user(username, gmail, password, admin_code=""):
         return False
     conn   = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT username FROM users WHERE username=%s", (username,))
+    # username must be unique, and so must the email (email can be used to log in)
+    cursor.execute(
+        "SELECT username FROM users WHERE username=%s OR LOWER(gmail)=LOWER(%s)",
+        (username, gmail),
+    )
     if cursor.fetchone():
         conn.close()
         return False
-    role = "Admin" if admin_code == ADMIN_CODE else "Owner"
+    role = "Admin" if (ADMIN_CODE and admin_code == ADMIN_CODE) else "Owner"
     cursor.execute(
         "INSERT INTO users (username, gmail, password, role) VALUES (%s,%s,%s,%s)",
         (username, gmail, hash_password(password).decode(), role),
@@ -58,10 +227,20 @@ def register_user(username, gmail, password, admin_code=""):
     conn.commit(); conn.close()
     return True
 
-def get_user(username):
+def get_user(username_or_email):
+    """
+    Find a user by username OR email.
+    Returns (username, password_hash) or None. A username match wins over an
+    email match. The caller must always use the returned username.
+    """
     conn   = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT username, password FROM users WHERE username=%s", (username,))
+    cursor.execute(
+        """SELECT username, password FROM users
+           WHERE username=%s OR LOWER(gmail)=LOWER(%s)
+           ORDER BY (username=%s) DESC LIMIT 1""",
+        (username_or_email, username_or_email, username_or_email),
+    )
     user = cursor.fetchone()
     conn.close()
     return user
@@ -293,7 +472,7 @@ def owner_create_team_member(username, gmail, password, role, business_id, owner
 
 # ─────────────────────────── TRANSACTIONS ────────────────────
 
-def save_sales(username, business_id, product, qty, amount, date, notes=""):
+def save_sales(username, business_id, product, qty, amount, date, notes="", receipt_url=None):
     conn   = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -306,10 +485,10 @@ def save_sales(username, business_id, product, qty, amount, date, notes=""):
 
     cursor.execute(
         """INSERT INTO transactions
-           (username, type, amount, business_id, cogs, product, quantity, txn_date, notes)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+           (username, type, amount, business_id, cogs, product, quantity, txn_date, notes, receipt_url)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
         (username, "Sales", amount, business_id, total_cogs,
-         product, qty, str(date), notes),
+         product, qty, str(date), notes, receipt_url),
     )
     cursor.execute(
         "UPDATE inventory SET quantity = quantity - %s WHERE product=%s AND business_id=%s",
@@ -321,14 +500,14 @@ def save_sales(username, business_id, product, qty, amount, date, notes=""):
     )
     conn.commit(); conn.close()
 
-def save_expense(username, business_id, amount, category, date, notes=""):
+def save_expense(username, business_id, amount, category, date, notes="", receipt_url=None):
     conn   = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         """INSERT INTO transactions
-           (username, type, amount, business_id, category, txn_date, notes)
-           VALUES (%s,%s,%s,%s,%s,%s,%s)""",
-        (username, "Expense", amount, business_id, category, str(date), notes),
+           (username, type, amount, business_id, category, txn_date, notes, receipt_url)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+        (username, "Expense", amount, business_id, category, str(date), notes, receipt_url),
     )
     conn.commit(); conn.close()
 
@@ -337,14 +516,14 @@ def get_transactions(business_id, txn_type=None, limit=50):
     cursor = conn.cursor()
     if txn_type:
         cursor.execute(
-            """SELECT id, type, amount, category, product, quantity, txn_date, notes
+            """SELECT id, type, amount, category, product, quantity, txn_date, notes, receipt_url
                FROM transactions WHERE business_id=%s AND type=%s
                ORDER BY created_at DESC LIMIT %s""",
             (business_id, txn_type, limit),
         )
     else:
         cursor.execute(
-            """SELECT id, type, amount, category, product, quantity, txn_date, notes
+            """SELECT id, type, amount, category, product, quantity, txn_date, notes, receipt_url
                FROM transactions WHERE business_id=%s
                ORDER BY created_at DESC LIMIT %s""",
             (business_id, limit),
@@ -436,6 +615,47 @@ def get_sales_trend(business_id, period="month"):
     rows = cursor.fetchall()
     conn.close()
     return rows
+
+
+# ─────────────────── WEEKLY / MONTHLY SUMMARY ────────────────
+
+def _period_summary(business_id, unit, lookback):
+    """
+    One query that pivots Sales / Expense / COGS side by side for every
+    week or month. Returns [(period_start_date, sales, expense, cogs, profit)].
+    `unit` and `lookback` are fixed strings from this file, never user input.
+    """
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        f"""SELECT DATE_TRUNC('{unit}', txn_date::timestamp)::date AS period_start,
+                   SUM(CASE WHEN type='Sales'   THEN amount ELSE 0 END),
+                   SUM(CASE WHEN type='Expense' THEN amount ELSE 0 END),
+                   SUM(CASE WHEN type='Sales'   THEN cogs   ELSE 0 END)
+            FROM transactions
+            WHERE business_id=%s
+              AND txn_date::timestamp >= CURRENT_DATE - INTERVAL '{lookback}'
+            GROUP BY period_start
+            ORDER BY period_start DESC""",
+        (business_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    result = []
+    for start, sales, expense, cogs in rows:
+        sales, expense, cogs = float(sales or 0), float(expense or 0), float(cogs or 0)
+        result.append((start, sales, expense, cogs, sales - expense - cogs))
+    return result
+
+def get_weekly_summary(business_id):
+    """Last 12 weeks, newest first."""
+    return _period_summary(business_id, "week", "12 weeks")
+
+def get_monthly_summary(business_id):
+    """Last 12 months, newest first. The label is e.g. 'March 2026'."""
+    return [(start.strftime("%B %Y"), s, e, c, p)
+            for start, s, e, c, p in _period_summary(business_id, "month", "12 months")]
 
 
 # ─────────────────────────── INVENTORY ───────────────────────

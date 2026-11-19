@@ -17,7 +17,9 @@ def initialize_database():
         username   TEXT PRIMARY KEY,
         gmail      TEXT,
         password   TEXT,
-        role       TEXT DEFAULT 'Owner'
+        role       TEXT DEFAULT 'Owner',
+        failed_attempts INTEGER DEFAULT 0,
+        locked_until    TIMESTAMP DEFAULT NULL
     )
     """)
 
@@ -46,6 +48,7 @@ def initialize_database():
         quantity    INTEGER DEFAULT 0,
         txn_date    TEXT,
         notes       TEXT,
+        receipt_url TEXT DEFAULT NULL,
         created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (business_id) REFERENCES business(id)
     )
@@ -122,6 +125,14 @@ def initialize_database():
         logout_time TIMESTAMP DEFAULT NULL
     )
     """)
+
+    # ───────────── SAFE MIGRATIONS (existing databases) ─────────────
+    # CREATE TABLE IF NOT EXISTS does not add new columns to a table that
+    # already exists, so we add them here. IF NOT EXISTS makes this safe to
+    # run on every start-up and it never touches existing data.
+    cursor.execute("ALTER TABLE users        ADD COLUMN IF NOT EXISTS failed_attempts INTEGER   DEFAULT 0")
+    cursor.execute("ALTER TABLE users        ADD COLUMN IF NOT EXISTS locked_until    TIMESTAMP DEFAULT NULL")
+    cursor.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS receipt_url     TEXT      DEFAULT NULL")
 
     conn.commit()
     conn.close()
